@@ -18,6 +18,7 @@ import threading
 import time
 from urllib import error, parse, request
 import uuid
+from checkout_beta import CheckoutBeta, BetaError, TEST_PART, run_browser
 
 ROOT = Path(__file__).resolve().parent
 CATALOG = json.loads((ROOT / "catalog.json").read_text(encoding="utf-8"))
@@ -125,7 +126,7 @@ def http_json(url, *, proxy=None, payload=None, timeout=4, service="Apple"):
                 delay = max(delay, float(json.loads(exc.read(4096)).get("retry_after", 0)))
             except (ValueError, TypeError, AttributeError):
                 pass
-        if service == "Apple" and status_code in (403, 429, 541):
+        if service == "Apple" and (status_code == 429 or (status_code in (403, 541) and not proxy)):
             delay = max(delay, 60)
         exc.close()
         raise FetchError(f"{service} HTTP {status_code}", retry_after=delay, status_code=status_code) from None
@@ -134,7 +135,7 @@ def http_json(url, *, proxy=None, payload=None, timeout=4, service="Apple"):
         raise FetchError(f"{service} network/TLS/timeout failure", ambiguous=data is not None, transport=True) from None
 
 
-def parse_pickup(payload):
+def parse_pickup(payload, *, parts=None, product_name="iPhone Duo"):
     """Strict product and catalog/state filtering; absent fields stay unknown."""
     if not isinstance(payload, dict):
         raise FetchError("Apple response is not an object")
@@ -144,6 +145,7 @@ def parse_pickup(payload):
     if not isinstance(stores, list):
         raise FetchError("Apple response missing body.stores")
     rows = {}
+    parts = PARTS if parts is None else parts
     for store in stores:
         if not isinstance(store, dict):
             continue
@@ -153,15 +155,18 @@ def parse_pickup(payload):
         availability = store.get("partsAvailability")
         if not isinstance(availability, dict):
             continue
-        for part, model in PARTS.items():
+        for part, model in parts.items():
             item = availability.get(part)
             if not isinstance(item, dict):
                 continue
             regular = (item.get("messageTypes") or {}).get("regular") or {}
             title = html.unescape(str(regular.get("storePickupProductTitle", "")))
             title = re.sub(r"<[^>]*>", "", title)
-            verified = bool(re.search(r"\biPhone\s+Duo\b", title, re.I)
-                            and re.search(r"(?<!\d)256\s*GB\b", title, re.I)
+            family = r"\b" + r"\s+".join(re.escape(word) for word in product_name.split()) + r"\b"
+            capacity = re.fullmatch(r"(\d+)(GB|TB)", model["storage"], re.I)
+            storage_pattern = r"(?<!\d)" + capacity[1] + r"\s*" + capacity[2] + r"\b" if capacity else r"(?!)"
+            verified = bool(re.search(family, title, re.I)
+                            and re.search(storage_pattern, title, re.I)
                             and re.search(r"\b" + re.escape(model["color"]) + r"\b", title, re.I))
             explicit_part = item.get("partNumber", part)
             display = item.get("pickupDisplay")
@@ -173,8 +178,10 @@ def parse_pickup(payload):
 
 
 class AppleClient:
-    def __init__(self, cfg, fetch=http_json):
+    def __init__(self, cfg, fetch=http_json, *, parts=None, product_name="iPhone Duo"):
         self.cfg, self.fetch = cfg, fetch
+        self.parts = PARTS if parts is None else parts
+        self.product_name = product_name
         self.cooldowns = {}
         self.last_errors = {}
         self.rotation = 0
@@ -187,12 +194,12 @@ class AppleClient:
 
     def _query(self, zip_code, proxy, timeout=None):
         params = {"pl": "true", "location": zip_code,
-                  **{f"parts.{i}": part for i, part in enumerate(PARTS)}}
+                  **{f"parts.{i}": part for i, part in enumerate(self.parts)}}
         with self.network_lock:
             self.request_count += 1
         payload = self.fetch(APPLE_URL + "?" + parse.urlencode(params), proxy=proxy,
                              timeout=timeout or self.cfg["request_timeout_seconds"])
-        return parse_pickup(payload)
+        return parse_pickup(payload, parts=self.parts, product_name=self.product_name)
 
     def _next_proxy(self, excluded, preferred=None):
         with self.network_lock:
@@ -215,7 +222,7 @@ class AppleClient:
         deadline = time.monotonic() + self.cfg["request_timeout_seconds"]
         excluded = set()
         last_error = None
-        for attempt in range(min(2, len(self.cfg["proxies"]))):
+        for attempt in range(min(3, len(self.cfg["proxies"]))):
             try:
                 index, proxy = self._next_proxy(excluded, self.preferred_proxies.get(zip_code) if attempt == 0 else None)
             except FetchError:
@@ -236,13 +243,14 @@ class AppleClient:
                         self.failover_count += 1
                 return result
             except FetchError as exc:
-                # HTTP rate limits and application errors retain ZIP backoff.
-                # Only transport failures can switch routes within this check.
-                if exc.status_code in (403, 541):
+                # A proxy-specific rejection is different from an explicit
+                # upstream rate limit. Never manufacture ZIP Retry-After for it.
+                rejected_route = exc.status_code in (403, 541)
+                if rejected_route:
                     with self.network_lock:
                         failures = self.proxy_health.get(index, (0, 0))[0] + 1
                         self.proxy_health[index] = (failures, time.monotonic() + max(300, exc.retry_after))
-                if not exc.transport or exc.retry_after:
+                if (not exc.transport and not rejected_route) or exc.retry_after:
                     raise
                 last_error = exc
                 excluded.add(index)
@@ -289,7 +297,7 @@ class AppleClient:
         # Regional ZIPs cover NJ and NYC. Query any missing store's own ZIP
         # when Apple changes its radius/list; missing never means sold out.
         missing = [s["zip"] for sid, s in STORES.items()
-                   if any((sid, part) not in rows or rows[(sid, part)]["status"] == "unknown" for part in PARTS)]
+                   if any((sid, part) not in rows or rows[(sid, part)]["status"] == "unknown" for part in self.parts)]
         fallback = list(dict.fromkeys(z for z in missing if z not in self.cfg["seed_zips"]))
         if fallback and rows:
             more, issues, count = self._batch(fallback)
@@ -331,6 +339,7 @@ class State:
         self.status = {"last_sweep_at": None, "last_ok_at": None, "requests": 0,
                        "failures": 0, "duration_ms": 0, "errors": [], "sweeps": 0,
                        "warnings": [], "request_failures": 0, "running": True, "discord_last_error": None}
+        self.beta = CheckoutBeta(self.db, self.lock, STORES, PARTS, buy_url)
 
     def apply(self, observations, *, errors=(), requests=0, duration_ms=0, diagnostics=None):
         now = iso()
@@ -363,6 +372,7 @@ class State:
             self.status.update(diagnostics or {})
             if known == len(STORES) * len(PARTS):
                 self.status["last_ok_at"] = now
+        self.beta.consider(observations)
 
     def snapshot(self):
         with self.lock:
@@ -382,6 +392,7 @@ class State:
                                  "buy_url": buy_url(part)})
             events = [dict(r) for r in self.db.execute("SELECT * FROM events ORDER BY started_at DESC, id DESC LIMIT 100")]
             return {"stores": list(STORES.values()), "parts": PARTS, "rows": rows, "events": events,
+                    "beta": self.beta.snapshot(),
                     "status": {**self.status, "stores_seen": len({r["store_id"] for r in rows if r["status"] != "unknown"}),
                                "products_verified": sum(r["verified"] for r in rows),
                                "stores_expected": len(STORES), "products_expected": len(STORES) * len(PARTS),
@@ -483,6 +494,24 @@ def poll_loop(state, stop):
         stop.wait(max(0, state.cfg["interval_seconds"] - (time.monotonic() - start)))
 
 
+def beta_loop(state, stop):
+    while not stop.is_set():
+        job = state.beta.claim()
+        if job:
+            try:
+                if job["status"] == "checking_stock":
+                    cfg = {**state.cfg, "seed_zips": [STORES[job["preferred_store"]]["zip"] if job["preferred_store"] else "10017"]}
+                    client = AppleClient(cfg, parts={TEST_PART: {"storage":"256GB", "color":"Black"}}, product_name="iPhone 17e")
+                    rows, errors, _ = client._batch(cfg["seed_zips"])
+                    state.beta.test_stock_checked(job["run_id"], rows, errors)
+                else:
+                    run_browser(ROOT, state.beta, job, stop)
+            except Exception:
+                state.beta.finish(job["run_id"], {"status":"needs_attention", "stage":"interrupted", "message":"The beta stopped unexpectedly. Inspect the beta browser bag before resetting; stock monitoring continues."})
+                LOG.warning("Checkout beta stopped; run %s needs attention", job["run_id"])
+        stop.wait(0.25)
+
+
 def handler_for(state, shutdown=None):
     assets = {"/": ("index.html", "text/html; charset=utf-8"),
               "/app.js": ("app.js", "text/javascript; charset=utf-8"),
@@ -493,9 +522,42 @@ def handler_for(state, shutdown=None):
         def do_POST(self):
             origin = self.headers.get("Origin")
             expected_origin = f"http://127.0.0.1:{self.server.server_port}"
-            if (self.path != "/api/stop" or shutdown is None
+            beta_routes = {"/api/beta/arm", "/api/beta/test", "/api/beta/stop", "/api/beta/reset"}
+            if (self.path not in beta_routes | {"/api/stop"}
                     or self.headers.get("Content-Type") != "application/json"
                     or origin not in (None, expected_origin)):
+                self.send_error(403)
+                return
+            if self.path in beta_routes:
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= 4096:
+                        raise ValueError()
+                    body = json.loads(self.rfile.read(length))
+                    if not isinstance(body, dict):
+                        raise ValueError()
+                    if self.path in ("/api/beta/arm", "/api/beta/test"):
+                        result = state.beta.arm(is_test=self.path.endswith("/test"), store_id=body.get("store_id"), part=body.get("part"))
+                    elif self.path.endswith("/stop"):
+                        result = state.beta.stop()
+                    else:
+                        result = state.beta.reset(body.get("bag_cleared"))
+                    data = json.dumps(result).encode()
+                    status_code = 200
+                except BetaError as exc:
+                    data = json.dumps({"error":str(exc)}).encode()
+                    status_code = 409
+                except (ValueError, TypeError):
+                    data = b'{"error":"Invalid beta request"}'
+                    status_code = 400
+                self.send_response(status_code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            if shutdown is None:
                 self.send_error(403)
                 return
             self.send_response(200)
@@ -571,7 +633,7 @@ def main():
     (data_dir / "monitor.pid").write_text(str(__import__("os").getpid()))
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
-    workers = [threading.Thread(target=fn, args=(state, stop), daemon=True) for fn in (poll_loop, alert_loop)]
+    workers = [threading.Thread(target=fn, args=(state, stop), daemon=True) for fn in (poll_loop, alert_loop, beta_loop)]
     for worker in workers:
         worker.start()
     LOG.info("NJ + Manhattan Duo Radar: http://127.0.0.1:%d (keep this process running)", cfg["dashboard_port"])

@@ -84,6 +84,17 @@ class ProductTests(unittest.TestCase):
         self.assertNotIn(("R755", "MK1F4LL/A"), result)
         self.assertEqual(len(result), 36)
 
+    def test_diagnostic_product_never_enters_duo_rows_and_requires_its_own_storage(self):
+        part = "MHRN4LL/A"
+        data = {"body":{"stores":[{"storeNumber":"R654","state":"NY","partsAvailability":{
+            part:{"partNumber":part,"pickupDisplay":"available","messageTypes":{"regular":{
+                "storePickupProductTitle":"iPhone 17e 256GB Black"}}}}}]}}
+        self.assertEqual(m.parse_pickup(data), {})
+        rows = m.parse_pickup(data,parts={part:{"storage":"256GB","color":"Black"}},product_name="iPhone 17e")
+        self.assertEqual(rows[("R654",part)]["status"],"available")
+        rows = m.parse_pickup(data,parts={part:{"storage":"512GB","color":"Black"}},product_name="iPhone 17e")
+        self.assertEqual(rows[("R654",part)]["status"],"unknown")
+
     def test_missing_and_unfamiliar_status_are_unknown(self):
         for display in (None, "ineligible", "Available", "", "availableSoon"):
             data = payload("available", ["R755"])
@@ -205,6 +216,25 @@ class TransitionTests(unittest.TestCase):
 
 
 class NetworkTests(unittest.TestCase):
+    def test_proxy_541_without_retry_after_fails_over_without_pausing_zip(self):
+        cfg = config()
+        cfg["seed_zips"] = ["07470"]
+        cfg["proxies"] = ["http://proxy-a.example:10000", "http://proxy-b.example:10000"]
+        calls = []
+        def fetch(url, **kwargs):
+            calls.append(kwargs["proxy"])
+            if kwargs["proxy"] == cfg["proxies"][0]:
+                raise m.FetchError("Apple HTTP 541", status_code=541)
+            return payload()
+        client = m.AppleClient(cfg, fetch)
+        rows, errors, count = client.sweep()
+        self.assertEqual((len(rows), errors, count), (38, [], 2))
+        self.assertNotIn("07470", client.cooldowns)
+        self.assertEqual(client.diagnostics["proxies_cooling_down"], 1)
+        self.assertEqual(client.diagnostics["proxy_failovers"], 1)
+        self.assertEqual(client.sweep()[2], 1)
+        self.assertEqual(calls.count(cfg["proxies"][0]), 1)
+
     def test_transport_failure_uses_another_proxy_and_cools_down_failed_route(self):
         cfg = config()
         cfg["seed_zips"] = ["07470"]

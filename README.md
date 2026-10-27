@@ -49,13 +49,13 @@ Copy `config.example.json` to `config.local.json`. Credentials belong only in th
 http://USER:PASSWORD@proxy.example:10000
 ```
 
-Percent-encode special characters in proxy usernames/passwords. The proxy pool is used for Apple inventory requests; Discord delivery connects directly. Credential-bearing transport errors are not exposed in logs. A working proxy is reused for each ZIP; transport failures pause that route for 30?300 seconds and allow one alternate proxy within the request budget. HTTP 403/541 pause that proxy for at least five minutes while the ZIP Retry-After remains in force. The dashboard shows how many proxies are ready. If overlapping successful responses still verify every product, failed upstream checks remain visible under connection-recovery details instead of being labeled an inventory outage. The monitor disables inherited system/environment proxies so this local setting is authoritative.
+Percent-encode special characters in proxy usernames/passwords. The proxy pool is used for Apple inventory requests; Discord delivery connects directly. Credential-bearing transport errors are not exposed in logs. A working proxy is reused for each ZIP; transport failures pause that route for 30 to 300 seconds. HTTP 403/541 pause that proxy for at least five minutes. A rejected proxy without an explicit `Retry-After` can fail over within the current request budget instead of unnecessarily pausing the ZIP. Up to three routes can be attempted within that budget; HTTP 429 and explicit `Retry-After` responses retain backoff. The dashboard shows how many proxies are ready. If overlapping successful responses still verify every product, failed upstream checks remain visible under connection-recovery details instead of being labeled an inventory outage. The monitor disables inherited system/environment proxies so this local setting is authoritative.
 
 ## Polling and duplicate suppression
 
 The endpoint is `https://www.apple.com/shop/retail/pickup-message?pl=true&location=ZIP&parts.0=MK1F4LL%2FA&parts.1=MK1E4LL%2FA`. The monitor reads `body.stores[].partsAvailability[part].pickupDisplay` and accepts only catalogued store IDs with the expected NJ/NY state. Three regional ZIPs cover the area, with targeted ZIP fallback for missing stores.
 
-Sweeps start every five seconds under normal conditions and never overlap. Slow requests can extend the interval; Apple errors trigger backoff and `Retry-After` is honored. HTTP 403/429/541 trigger at least a one-minute cooldown. Failed, missing, stale, or unverified data is **unknown**, never fabricated stock or a sold-out transition.
+Sweeps start every five seconds under normal conditions and never overlap. Slow requests can extend the interval; Apple errors trigger backoff and `Retry-After` is honored. Direct-connection 403/541 and all 429 responses trigger at least a one-minute cooldown; proxy-specific rejections can use another ready route. Failed, missing, stale, or unverified data is **unknown**, never fabricated stock or a sold-out transition.
 
 SQLite state in `.data/monitor.sqlite3` suppresses repeated alerts per **store + part** across polls and restarts. Only confirmed unavailable → available transitions rearm a restock alert. Initial available stock also alerts. Pending alerts are retried after definite failures and expire when stock disappears. A send with an ambiguous outcome is marked `uncertain` and is not automatically resent, preventing blind duplicates; the UI exposes that status.
 
@@ -63,7 +63,7 @@ SQLite state in `.data/monitor.sqlite3` suppresses repeated alerts per **store +
 
 ```powershell
 python -m unittest discover -s tests -v
-node --test tests/test_checkout.js
+node --test tests/test_checkout.js tests/test_beta_browser.js
 ```
 
 Tests cover product/storage/state validation, initial/restock transitions, restart deduplication, cooldowns, authenticated HTTP CONNECT proxies, fixture HTTP responses, Discord message links, local credential isolation, and the checkout helper. Browser QA covers desktop/mobile, both regions, filters, maps, clipboard fallback, and disconnection/recovery. See `research/browser-qa.json`.
@@ -78,6 +78,18 @@ REA 6.8.0 was installed through `npx rea-agents@latest setup` after plan approva
 
 Downloaded reference scripts, full generated evidence, screenshots, local setup diagnostics, runtime binaries, credentials, and monitoring data stay local. The compact findings and provenance report are versioned.
 
-## Ordering automation status
+## Checkout beta
 
-Live automatic purchasing is **disabled**. The requested exploration limits are **$1,300 maximum per phone including tax**, **one phone at a time**, either monitored 256GB color, no AppleCare, and selection from the watched stores. The proposed implementation permits one successful order per armed run and requires manual rearming. Apple account/payment authentication, authoritative final-total verification, and order confirmation/recovery must be implemented and tested before unattended ordering can be enabled. Card details should be entered in Apple's own payment interface and must not be committed here. See the [automatic checkout exploration](research/CHECKOUT-AUTOMATION.md) for the next implementation steps and remaining runtime evidence.
+The beta prepares one phone in a **separate Chrome profile**, with a **$2,300 tax-inclusive cap**, quantity **one**, unlocked/full-price purchase, no trade-in, and **no AppleCare**. Payment submission is not implemented. Stock monitoring and Discord delivery continue independently.
+
+1. Run **Setup-Beta.cmd** once to prepare the checksum-verified portable Node runtime; Chrome must also be installed.
+2. Open the dashboard. In **Checkout beta**, choose any watched store or a specific store and either Duo color or a specific color.
+3. Click **Arm Duo beta**. The next current, verified available-stock observation selects one matching phone and opens the dedicated Apple browser.
+4. Alternatively, **Test iPhone 17e** performs a fresh stock check for the diagnostic **256GB Black iPhone 17e (`MHRN4LL/A`)**, then runs the same preparation path. It never adds this part to Duo monitoring or Discord stock alerts.
+5. Use **Stop beta** to halt automation. Inspect and clear the separate browser bag, check the empty-bag box, and **Reset beta** before another run. The browser remains open for inspection. Restarting the monitor disarms a waiting run and preserves an interrupted preparation as needing attention.
+
+The companion verifies an empty bag, exact part, all product options, and the selected upfront price before one add attempt. It never blindly retries an ambiguous add. A durable run lock prevents concurrent phones or automatic rearming. Browser cookies/payment information stay in Apple's local browser profile under ignored `.data/`; do not put card details in chat or this repository.
+
+**Current live-test limitation:** Apple rejected the diagnostic cart request with **HTTP 541** on both direct and tested proxy routes, and the bag was confirmed empty afterward. The beta therefore pauses with **Needs attention**. Pickup selection, populated-bag quantity controls, final tax-inclusive totals, and checkout are **not yet automated or verified**. A `review_ready` state requires every product/store/quantity/AppleCare/currency/tax/total fact to be verified within the limit; the current browser adapter does not invent those facts.
+
+See the [live REA evidence and test results](research/BETA-CHECKOUT-EVIDENCE.md) and [checkout investigation](research/CHECKOUT-AUTOMATION.md).

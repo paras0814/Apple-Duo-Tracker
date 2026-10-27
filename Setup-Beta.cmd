@@ -1,0 +1,5 @@
+@echo off
+setlocal
+set "DUO_PROJECT_ROOT=%~dp0"
+powershell.exe -NoProfile -Command "$ErrorActionPreference='Stop'; $r=Join-Path $env:DUO_PROJECT_ROOT '.runtime'; $v='v24.22.1'; $folder=Join-Path $r ('node-'+$v+'-win-x64'); if (-not (Test-Path -LiteralPath (Join-Path $folder 'node.exe'))) { New-Item -ItemType Directory -Path $r -Force | Out-Null; $name='node-'+$v+'-win-x64.zip'; $archive=Join-Path $r $name; $base='https://nodejs.org/dist/'+$v+'/'; Invoke-WebRequest -UseBasicParsing -Uri ($base+$name) -OutFile $archive; $checks=(Invoke-WebRequest -UseBasicParsing -Uri ($base+'SHASUMS256.txt')).Content; $entry=($checks -split '\r?\n' | Where-Object { $_.EndsWith('  '+$name) }); if (-not $entry -or (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne ($entry -split '\s+')[0]) { throw 'Node runtime checksum mismatch' }; Expand-Archive -LiteralPath $archive -DestinationPath $r -Force }; Set-Content -LiteralPath (Join-Path $r 'node-path.txt') -Value $folder -Encoding UTF8; Write-Host 'Checkout beta runtime is ready. Chrome must also be installed.'"
+if errorlevel 1 pause

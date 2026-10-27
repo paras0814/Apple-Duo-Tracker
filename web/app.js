@@ -6,6 +6,8 @@ let region = 'all';
 let selected = null;
 let fetching = false;
 let bookmarklet = null;
+let betaPosting = false;
+let betaActionError = null;
 const text = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clock = value => value ? new Date(value).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : 'Waiting for Apple';
 const duration = (start, end) => { const seconds = Math.max(0, Math.floor(((end ? new Date(end) : new Date()) - new Date(start)) / 1000)); return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds/60)}m ${seconds%60}s`; };
@@ -41,6 +43,23 @@ function inspect(id) {
   const details = `<strong>${text(store.name)}</strong> · ${text(store.city)}, ${text(store.state)}<br>${rowsFor(id).map(r => `${text(snapshot.parts[r.part].color)} 256GB: ${statusLabel(r.status)}`).join(' &nbsp; / &nbsp; ')}`;
   $('inspect').innerHTML = details;
   $('city-inspect').innerHTML = store.state === 'NY' ? details : 'Choose a city store for pickup details.';
+}
+function renderBeta() {
+  const beta = snapshot.beta || {status:'unavailable',can_arm:false,message:'Restart the local monitor to load the checkout beta.'};
+  const selector = $('beta-store');
+  if (selector.options.length !== snapshot.stores.length + 1) {
+    const selectedStore = selector.value;
+    selector.innerHTML = '<option value="">Any watched store</option>' + snapshot.stores.map(store => `<option value="${store.id}">${text(store.name)} · ${store.state}</option>`).join('');
+    selector.value = selectedStore;
+  }
+  $('beta-state').textContent = beta.status.replaceAll('_',' ');
+  $('beta-message').textContent = betaActionError || beta.message;
+  $('beta-arm').disabled = betaPosting || !beta.can_arm;
+  $('beta-test').disabled = betaPosting || !beta.can_arm;
+  $('beta-stop').disabled = betaPosting || beta.can_arm || beta.status === 'unavailable';
+  $('beta-reset').disabled = betaPosting || beta.worker_active || !$('beta-bag-cleared').checked || ['preparing','queued','checking_stock_running'].includes(beta.status);
+  $('beta-target').hidden = !beta.target;
+  if (beta.target) $('beta-target').textContent = `${beta.target.is_test ? 'TEST · ' : ''}${beta.target.model} ${beta.target.storage} ${beta.target.color} · Apple ${beta.target.store_name}`;
 }
 function render() {
   const {status, stores, rows, parts, events} = snapshot;
@@ -80,6 +99,7 @@ function render() {
   $('empty-filter').hidden = visible.length !== 0;
   $('history').innerHTML = events.length ? events.map(e => {const s=stores.find(s=>s.id===e.store_id);return `<tr><td>${text(s?.name || e.store_id)}</td><td>${text(parts[e.part]?.color || e.part)}</td><td title="${text(new Date(e.started_at).toLocaleString())}">${clock(e.started_at)}</td><td>${duration(e.started_at,e.ended_at)}${e.ended_at?'':' · open'}</td><td class="${e.delivery==='delivered'?'delivered':''}" title="${text(e.delivery_error || '')}">${text(e.delivery)}</td></tr>`;}).join('') : '<tr><td colspan="5" class="empty">No stock transitions recorded yet. Initial stock and restocks will appear here.</td></tr>';
   renderMap();
+  renderBeta();
   if (selected) inspect(selected);
 }
 async function refresh() {
@@ -141,6 +161,29 @@ $('copy-bookmarklet').addEventListener('click', async () => {
 });
 $('bookmarklet-drag').addEventListener('click', event => {event.preventDefault();$('bookmarklet-status').textContent='Drag Add to Bag to your bookmarks bar, or use Copy bookmarklet for manual setup.';});
 loadBookmarklet().catch(() => {});
+
+async function betaAction(action) {
+  if (betaPosting) return;
+  betaPosting = true;
+  betaActionError = null;
+  if (snapshot) renderBeta();
+  const body = action === 'reset' ? {bag_cleared:$('beta-bag-cleared').checked} : {store_id:$('beta-store').value || null};
+  if (action === 'arm') body.part = $('beta-part').value || null;
+  try {
+    const response = await fetch(`/api/beta/${action}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'The beta command failed.');
+    if (snapshot) snapshot.beta = result;
+    if (action === 'reset') $('beta-bag-cleared').checked = false;
+  } catch (error) {
+    betaActionError = error.message;
+  } finally {
+    betaPosting = false;
+    if (snapshot) renderBeta();
+  }
+}
+for (const action of ['arm','test','stop','reset']) $('beta-' + action).addEventListener('click',() => betaAction(action));
+$('beta-bag-cleared').addEventListener('change',() => {if(snapshot)renderBeta();});
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 refresh();
 setInterval(refresh, 1000);
