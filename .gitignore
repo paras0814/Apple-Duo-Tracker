@@ -6,6 +6,7 @@ __pycache__/
 rea/
 research/*
 !research/REVERSE-ENGINEERING.md
+!research/CHECKOUT-AUTOMATION.md
 !research/rea-findings.json
 !research/rea-reference-summary.json
 !research/browser-qa.json
