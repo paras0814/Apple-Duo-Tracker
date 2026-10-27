@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#080b10">
+  <title>NJ + NYC Duo Radar — 256GB pickup monitor</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header><a class="brand" href="/" aria-label="NJ and NYC Duo Radar home"><span class="spark">✦</span> DUO RADAR <span class="region">NEW JERSEY + NYC</span></a><div id="connection" class="connection"><span class="dot"></span><span id="connection-text">Connecting</span></div></header>
+    <main>
+      <div class="hero-grid">
+        <section class="hero">
+          <p class="eyebrow">IPHONE DUO / 256GB / IN-STORE PICKUP</p>
+          <h1>Eyes on<br>the <em>next pickup.</em></h1>
+          <p class="intro" id="intro">Two colors. New Jersey + all five NYC boroughs. A quiet watch for your next pickup.</p>
+          <div class="stats">
+            <div><span>STORES WATCHED</span><strong id="coverage">— / —</strong></div>
+            <div><span>CHECK INTERVAL</span><strong>5 seconds</strong></div>
+            <div><span>READY FOR PICKUP</span><strong id="ready-count">—</strong></div>
+          </div>
+          <div class="map-head"><span class="eyebrow">THE NJ CONSTELLATION</span><span class="map-caption">Select a store to inspect</span></div>
+          <svg id="radar" viewBox="0 0 650 710" role="img" aria-label="New Jersey Apple store availability map"></svg>
+          <div class="legend"><span><i class="legend-dot available"></i>Available</span><span><i class="legend-dot unavailable"></i>Sold out</span><span><i class="legend-dot unknown"></i>Unknown</span></div>
+          <div class="inspect" id="inspect" aria-live="polite">All NJ and NYC stores are on the radar. Choose a point for a closer look.</div>
+        </section>
+        <aside>
+          <section class="card alert-card"><div class="card-heading"><p class="eyebrow">YOUR DISCORD CONNECTION</p><span class="tiny-tag" id="discord-tag">CHECKING</span></div><h2>Catch the moment.</h2><p>Initial available stock and every confirmed restock go straight to your private channel.</p><div class="delivery"><span class="delivery-icon">↗</span><div><strong>Private-channel webhook</strong><span id="discord-status">Checking local configuration…</span></div></div><div class="models"><div><i class="swatch night"></i><strong>Night Sky</strong><span>256GB</span></div><div><i class="swatch white"></i><strong>Star White</strong><span>256GB</span></div></div><p class="small-note">A new alert requires a new stock transition. Your alert history survives a restart.</p></section>
+          <section class="card shelf"><div class="card-heading"><p class="eyebrow">READY FOR PICKUP</p><span class="live-pill" id="shelf-status">● WAITING</span></div><div id="available-list"><h2>Scanning the shelves.</h2><p>Waiting for the first verified Apple response.</p></div></section>
+          <section class="card checkout-card"><p class="eyebrow">FAST CHECKOUT</p><h2>One bookmark. Ready.</h2><p>Open the exact model from Discord, then use an <strong>Add to Bag</strong> bookmark on Apple.</p><div class="checkout-actions"><button type="button" id="copy-bookmarklet">Copy bookmarklet</button><a id="bookmarklet-drag" href="#quick-checkout" aria-disabled="true" draggable="true">Drag Add to Bag ↗</a></div><ol><li>Create a bookmark named <strong>Add to Bag</strong>. Edit its URL and paste the copied bookmarklet.</li><li>Open the model link from Discord on apple.com, then run that bookmark.</li><li>Choose the pickup store and complete checkout.</li></ol><p class="checkout-preset">256GB · exact color · unlocked · full price<br>You select the pickup store on Apple.</p><p id="bookmarklet-status" class="checkout-status" role="status" aria-live="polite">Use the copy button for manual setup, or drag the link to your bookmarks bar.</p><label for="bookmarklet-url" id="bookmarklet-label" hidden>Bookmark URL</label><textarea id="bookmarklet-url" rows="3" readonly hidden spellcheck="false"></textarea></section>
+          <section class="health-card"><p class="eyebrow">LAST SWEEP</p><div class="health-top"><strong id="last-check">Waiting for Apple</strong><span id="duration">—</span></div><p id="health-note">Stock is only marked available after Apple confirms the product and pickup status.</p><p id="error" class="error" role="status" hidden></p></section>
+          <section class="card city-inset"><div class="card-heading"><p class="eyebrow">THE NYC CONSTELLATION</p><span class="tiny-tag">5 BOROUGHS</span></div><p class="city-caption">A closer look at the city. Select a store.</p><svg id="city-radar" viewBox="0 0 420 445" role="img" aria-label="New York City Apple stores, shown as a schematic list"></svg><p id="city-inspect" class="city-selection" aria-live="polite">Choose a city store for pickup details.</p></section>
+        </aside>
+      </div>
+      <section class="stores-section"><div class="section-heading"><div><p class="eyebrow">NEW JERSEY + ALL FIVE NYC BOROUGHS</p><h2>The watch list<span>.</span></h2></div><div class="filter-stack"><div class="filters" role="group" aria-label="Filter stores by region"><button type="button" class="selected" data-region="all" aria-pressed="true">All regions <span id="region-count-all">—</span></button><button type="button" data-region="NJ" aria-pressed="false">NJ <span id="region-count-NJ">—</span></button><button type="button" data-region="NYC" aria-pressed="false">NYC <span id="region-count-NYC">—</span></button></div><div class="filters" role="group" aria-label="Filter stores by availability"><button type="button" class="selected" data-filter="all" aria-pressed="true">Any stock</button><button type="button" data-filter="available" aria-pressed="false">Available only</button></div></div></div><div class="store-grid" id="stores"></div><p id="empty-filter" hidden>No stores match this region and availability filter.</p></section>
+      <section class="history-section"><div class="section-heading"><div><p class="eyebrow">STOCK TRANSITIONS</p><h2>Every opening, recorded.</h2></div><span class="map-caption">Latest 100 events · times shown locally</span></div><div class="table-wrap"><table><thead><tr><th>STORE</th><th>256GB COLOR</th><th>DETECTED</th><th>DURATION</th><th>DISCORD</th></tr></thead><tbody id="history"><tr><td colspan="5" class="empty">No stock transitions recorded yet.</td></tr></tbody></table></div></section>
+    </main>
+    <footer><span>✦ NJ + NYC DUO RADAR</span><p>Apple pickup data · 256GB verified from product titles · Runs locally while your PC is awake</p><a href="https://www.apple.com/shop/buy-iphone/iphone-duo" target="_blank" rel="noopener noreferrer">Open Apple ↗</a></footer>
+  </div>
+</body>
+</html>

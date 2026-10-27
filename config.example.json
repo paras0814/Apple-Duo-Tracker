@@ -1,0 +1,16 @@
+{
+  "interval_seconds": 5,
+  "request_timeout_seconds": 4,
+  "seed_zips": [
+    "07470",
+    "08837",
+    "08002",
+    "10475"
+  ],
+  "proxies": [],
+  "discord": {
+    "mode": "webhook",
+    "webhook_url": ""
+  },
+  "dashboard_port": 8765
+}

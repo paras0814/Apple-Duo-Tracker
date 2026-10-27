@@ -1,0 +1,196 @@
+{
+  "exceptions": [],
+  "checks": [
+    {
+      "name": "24 NJ and NYC stores on desktop",
+      "passed": true,
+      "detail": 24
+    },
+    {
+      "name": "48 product variants",
+      "passed": true,
+      "detail": 48
+    },
+    {
+      "name": "24 selectable map points",
+      "passed": true,
+      "detail": {
+        "points": 24,
+        "invalid": false
+      }
+    },
+    {
+      "name": "Live coverage reflects all 24 stores",
+      "passed": true,
+      "detail": "24 / 24"
+    },
+    {
+      "name": "Requested NYC stores present",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "name": "Desktop no horizontal overflow",
+      "passed": true,
+      "detail": {
+        "title": "NJ + NYC Duo Radar — 256GB pickup monitor",
+        "cards": 24,
+        "variants": 48,
+        "mapPoints": 24,
+        "width": 1440,
+        "scrollWidth": 1425,
+        "coverage": "24 / 24",
+        "text": "✦\nDUO RADAR\nNEW JERSEY + NYC\nRADAR IS LIVE\n\nIPHONE DUO / 256GB / IN-STORE PICKUP\n\nEyes on\nthe next pickup.\n\nTwo colors. 24 stores across New Jersey + all five NYC boroughs. A quiet watch for your next pickup.\n\nSTORES WATCHED\n24 / 24\nCHECK INTERVAL\n5 seconds\nREADY FOR PICKUP\n00\nTHE NJ CONSTELLATION\nSelect a store to inspect\nPENNSYLVANIA\nNEW YORK\nATLANTIC\nAmerican Dream\nBridgewater\nCherry Hill\nFreehold\nGarden State\nMenlo Park\nQuaker Bridge\nRockaway\nSagemore\nShort Hills\nTice's Corner\nWillowbrook\nAvailable\nSold out\nUnknown\nAll NJ and NYC stores are on the radar. Choose a point for a closer look.\n\nYOUR DISCORD CONNECTION\n\nCONFIGURED\nCatch the moment.\n\nInitial available stock and every confirmed restock go straight to your private channel.\n\n↗\nPrivate-channel webhook\nLocal configuration loaded · duplicates suppressed\nNight Sky\n256GB\nStar White\n256GB\n\nA new alert requires a new stock transition. Your alert history survives a restart.\n\nREADY FOR PICKUP\n\n● LIVE\nQuiet on the shelves.\n\nNo verified 256GB stock right now. The radar keeps watching.\n\nFAST CHECKOUT\n\nOne bookmark. Ready.\n\nOpen the exact model from Discord, then use an Add to Bag bookmark on Apple.\n\nCopy bookmarklet\nDrag Add to Bag ↗\nCreate a bookmark named Add to Bag. Edit its URL and paste the copied bookmarklet.\nOpen the model link from Discord on apple.com, then run that bookmark.\nChoose the pickup store and complete checkout.\n\n256GB · exact color · unlocked · full price\nYou select the pickup store on Apple.\n\nUse the copy button for manual setup, or drag the link to your bookmarks bar.\n\nLAST SWEEP\n\n07:01:19 PM\n4 requests · 1073ms\n\n48/48 product titles verified · 17 local HTTP proxies · 44 sweeps\n\nTHE NYC CONSTELLATION\n\n5 BOROUGHS\n\nA closer look at the city. Select a store.\n\nDowntown Brooklyn\nBrooklyn\nFifth Avenue\nManhattan\nGrand Central\nManhattan\nQueens Center\nQueens\nSoHo\nManhattan\nStaten Island\nStaten Island\nThe Mall at Bay Plaza\nBronx\nUpper East Side\nManhattan\nUpper West Side\nManhattan\nWest 14th Street\nManhattan\nWilliamsburg\nBrooklyn\nWorld Trade Center\nManhattan\n\nChoose a city store for pickup details.\n\nNEW JERSEY + ALL FIVE NYC BOROUGHS\n\nThe watch list.\nAll regions 24\nNJ 12\nNYC 12\nAny stock\nAvailable only\nAmerican Dream\nR755\n\nEast Rutherford, NJ · 07073\n\nNight Sky\nSold out\nStar White\nSold out\nBridgewater\nR104\n\nBridgewater, NJ · 08807\n\nNight Sky\nSold out\nStar White\nSold out\nCherry Hill\nR206\n\nCherry Hill, NJ · 08002\n\nNight Sky\nSold out\nStar White\nSold out\nFreehold Raceway Mall\nR138\n\nFreehold, NJ · 07728\n\nNight Sky\nSold out\nStar White\nSold out\nGarden State Plaza\nR117\n\nParamus, NJ · 07652\n\nNight Sky\nSold out\nStar White\nSold out\nMenlo Park\nR067\n\nEdison, NJ · 08837\n\nNight Sky\nSold out\nStar White\nSold out\nQuaker Bridge\nR549\n\nLawrence Township, NJ · 08648\n\nNight Sky\nSold out\nStar White\nSold out\nRockaway\nR103\n\nRockaway, NJ · 07866\n\nNight Sky\nSold out\nStar White\nSold out\nSagemore\nR088\n\nMarlton, NJ · 08053\n\nNight Sky\nSold out\nStar White\nSold out\nShort Hills\nR043\n\nShort Hills, NJ · 07078\n\nNight Sky\nSold out\nStar White\nSold out\nTice's Corner\nR013\n\nWoodcliff Lake, NJ · 07677\n\nNight Sky\nSold out\nStar White\nSold out\nWillowbrook\nR325\n\nWayne, NJ · 07470\n\nNight Sky\nSold out\nStar White\nSold out\nDowntown Brooklyn\nR715\n\nBrooklyn, NY · 11217\n\nNight Sky\nSold out\nStar White\nSold out\nFifth Avenue\nR095\n\nNew York, NY · 10153\n\nNight Sky\nSold out\nStar White\nSold out\nGrand Central\nR415\n\nNew York, NY · 10017\n\nNight Sky\nSold out\nStar White\nSold out\nQueens Center\nR612\n\nElmhurst, NY · 11373\n\nNight Sky\nSold out\nStar White\nSold out\nSoHo\nR032\n\nNew York, NY · 10012\n\nNight Sky\nSold out\nStar White\nSold out\nStaten Island\nR152\n\nStaten Island, NY · 10314\n\nNight Sky\nSold out\nStar White\nSold out\nThe Mall at Bay Plaza\nR753\n\nBronx, NY · 10475\n\nNight Sky\nSold out\nStar White\nSold out\nUpper East Side\nR582\n\nNew York, NY · 10021\n\nNight Sky\nSold out\nStar White\nSold out\nUpper West Side\nR251\n\nNew York, NY · 10023\n\nNight Sky\nSold out\nStar White\nSold out\nWest 14th Street\nR250\n\nNew York, NY · 10014\n\nNight Sky\nSold out\nStar White\nSold out\nWilliamsburg\nR594\n\nBrooklyn, NY · 11211\n\nNight Sky\nSold out\nStar White\nSold out\nWorld Trade Center\nR654\n\nNew York, NY · 10007\n\nNight Sky\nSold out\nStar White\nSold out\n\nSTOCK TRANSITIONS\n\nEvery opening, recorded.\nLatest 100 events · times shown locally\nSTORE\t256GB COLOR\tDETECTED\tDURATION\tDISCORD\nNo stock transitions recorded yet. Initial stock and restocks will appear here.\n✦ NJ + NYC DUO RADAR\n\nApple pickup data · 256GB verified from product titles · Runs locally while your PC is awake\n\nOpen Apple ↗",
+        "invalidMap": false
+      }
+    },
+    {
+      "name": "UTF-8 labels render cleanly",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "name": "NJ region shows exactly 12 NJ stores",
+      "passed": true,
+      "detail": {
+        "cards": 12,
+        "states": [
+          "NJ",
+          "NJ",
+          "NJ",
+          "NJ",
+          "NJ",
+          "NJ",
+          "NJ",
+          "NJ",
+          "NJ",
+          "NJ",
+          "NJ",
+          "NJ"
+        ]
+      }
+    },
+    {
+      "name": "NYC region shows exactly 12 NYC stores",
+      "passed": true,
+      "detail": {
+        "cards": 12,
+        "states": [
+          "NY",
+          "NY",
+          "NY",
+          "NY",
+          "NY",
+          "NY",
+          "NY",
+          "NY",
+          "NY",
+          "NY",
+          "NY",
+          "NY"
+        ]
+      }
+    },
+    {
+      "name": "Available-only filter matches live data",
+      "passed": true,
+      "detail": {
+        "cards": 0,
+        "expected": 0,
+        "pressed": "true"
+      }
+    },
+    {
+      "name": "Combined region and availability fixture filters correctly",
+      "passed": true,
+      "detail": {
+        "cards": 1,
+        "states": [
+          "NY"
+        ],
+        "drops": 2,
+        "href": "https://www.apple.com/shop/buy-iphone/iphone-duo/7.6-inch-display-256gb-night-sky-unlocked"
+      }
+    },
+    {
+      "name": "Browser-only available fixture renders exact checkout link",
+      "passed": true,
+      "detail": "https://www.apple.com/shop/buy-iphone/iphone-duo/7.6-inch-display-256gb-night-sky-unlocked"
+    },
+    {
+      "name": "Map inspection selects American Dream",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "name": "NYC map keyboard inspection uses correct state",
+      "passed": true,
+      "detail": "World Trade Center · New York, NYNight Sky 256GB: Sold out   /   Star White 256GB: Sold out"
+    },
+    {
+      "name": "Copy flow passes exact encoded helper to real Clipboard API without execution",
+      "passed": true,
+      "detail": {
+        "copied": true,
+        "nativeWriteAccepted": true,
+        "scheme": true,
+        "matches": true,
+        "dragScheme": true,
+        "instructions": true,
+        "bytes": 4089
+      }
+    },
+    {
+      "name": "Bookmark drag link and manual pickup instructions present",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "name": "Denied clipboard reveals exact selectable manual bookmark URL",
+      "passed": true,
+      "detail": {
+        "visible": true,
+        "selected": true,
+        "matches": true
+      }
+    },
+    {
+      "name": "390px mobile no horizontal overflow",
+      "passed": true,
+      "detail": {
+        "width": 390,
+        "scrollWidth": 390,
+        "cards": 24,
+        "bodyWidth": 390,
+        "columns": "346px"
+      }
+    },
+    {
+      "name": "Mobile retains all stores",
+      "passed": true,
+      "detail": 24
+    },
+    {
+      "name": "Disconnected state shows unknown and clears stock links",
+      "passed": true,
+      "detail": {
+        "status": "Monitor disconnected",
+        "unknown": 48,
+        "buyLinks": 0,
+        "coverage": "0 / 24",
+        "shelf": "● WAITING"
+      }
+    },
+    {
+      "name": "Recovers after browser-only network block",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "name": "No JavaScript exceptions",
+      "passed": true,
+      "detail": []
+    }
+  ],
+  "clipboardLimitation": "Native Clipboard API accepted the write. Headless Chrome native readback returned an empty string, so OS clipboard roundtrip is unverified; the exact write argument was checked instead."
+}

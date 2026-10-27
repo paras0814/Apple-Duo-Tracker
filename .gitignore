@@ -1,0 +1,11 @@
+config.local.json
+.data/
+.runtime/
+__pycache__/
+*.pyc
+rea/
+research/*
+!research/REVERSE-ENGINEERING.md
+!research/rea-findings.json
+!research/rea-reference-summary.json
+!research/browser-qa.json

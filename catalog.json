@@ -1,0 +1,254 @@
+{
+  "parts": {
+    "MK1F4LL/A": {
+      "storage": "256GB",
+      "color": "Night Sky"
+    },
+    "MK1E4LL/A": {
+      "storage": "256GB",
+      "color": "Star White"
+    }
+  },
+  "stores": [
+    {
+      "id": "R755",
+      "name": "American Dream",
+      "city": "East Rutherford",
+      "state": "NJ",
+      "zip": "07073",
+      "lat": 40.80916,
+      "lng": -74.06739,
+      "retail_url": "https://www.apple.com/retail/americandream/"
+    },
+    {
+      "id": "R104",
+      "name": "Bridgewater",
+      "city": "Bridgewater",
+      "state": "NJ",
+      "zip": "08807",
+      "lat": 40.58638,
+      "lng": -74.61979,
+      "retail_url": "https://www.apple.com/retail/bridgewater/"
+    },
+    {
+      "id": "R206",
+      "name": "Cherry Hill",
+      "city": "Cherry Hill",
+      "state": "NJ",
+      "zip": "08002",
+      "lat": 39.941067,
+      "lng": -75.023797,
+      "retail_url": "https://www.apple.com/retail/cherryhill/"
+    },
+    {
+      "id": "R138",
+      "name": "Freehold Raceway Mall",
+      "city": "Freehold",
+      "state": "NJ",
+      "zip": "07728",
+      "lat": 40.253813,
+      "lng": -74.30017,
+      "retail_url": "https://www.apple.com/retail/freeholdracewaymall/"
+    },
+    {
+      "id": "R117",
+      "name": "Garden State Plaza",
+      "city": "Paramus",
+      "state": "NJ",
+      "zip": "07652",
+      "lat": 40.918482,
+      "lng": -74.07563,
+      "retail_url": "https://www.apple.com/retail/gardenstateplaza/"
+    },
+    {
+      "id": "R067",
+      "name": "Menlo Park",
+      "city": "Edison",
+      "state": "NJ",
+      "zip": "08837",
+      "lat": 40.549111,
+      "lng": -74.335811,
+      "retail_url": "https://www.apple.com/retail/menlopark/"
+    },
+    {
+      "id": "R549",
+      "name": "Quaker Bridge",
+      "city": "Lawrence Township",
+      "state": "NJ",
+      "zip": "08648",
+      "lat": 40.291824,
+      "lng": -74.681344,
+      "retail_url": "https://www.apple.com/retail/quakerbridge/"
+    },
+    {
+      "id": "R103",
+      "name": "Rockaway",
+      "city": "Rockaway",
+      "state": "NJ",
+      "zip": "07866",
+      "lat": 40.906615,
+      "lng": -74.553704,
+      "retail_url": "https://www.apple.com/retail/rockaway/"
+    },
+    {
+      "id": "R088",
+      "name": "Sagemore",
+      "city": "Marlton",
+      "state": "NJ",
+      "zip": "08053",
+      "lat": 39.87958,
+      "lng": -74.91887,
+      "retail_url": "https://www.apple.com/retail/sagemore/"
+    },
+    {
+      "id": "R043",
+      "name": "Short Hills",
+      "city": "Short Hills",
+      "state": "NJ",
+      "zip": "07078",
+      "lat": 40.740099,
+      "lng": -74.36499,
+      "retail_url": "https://www.apple.com/retail/shorthills/"
+    },
+    {
+      "id": "R013",
+      "name": "Tice's Corner",
+      "city": "Woodcliff Lake",
+      "state": "NJ",
+      "zip": "07677",
+      "lat": 41.04183,
+      "lng": -74.074864,
+      "retail_url": "https://www.apple.com/retail/ticescorner/"
+    },
+    {
+      "id": "R325",
+      "name": "Willowbrook",
+      "city": "Wayne",
+      "state": "NJ",
+      "zip": "07470",
+      "lat": 40.88944,
+      "lng": -74.25861,
+      "retail_url": "https://www.apple.com/retail/willowbrook/"
+    },
+    {
+      "id": "R715",
+      "name": "Downtown Brooklyn",
+      "city": "Brooklyn",
+      "state": "NY",
+      "zip": "11217",
+      "lat": 40.685612,
+      "lng": -73.978247,
+      "retail_url": "https://www.apple.com/retail/downtownbrooklyn/"
+    },
+    {
+      "id": "R095",
+      "name": "Fifth Avenue",
+      "city": "New York",
+      "state": "NY",
+      "zip": "10153",
+      "lat": 40.76383,
+      "lng": -73.97296,
+      "retail_url": "https://www.apple.com/retail/fifthavenue/"
+    },
+    {
+      "id": "R415",
+      "name": "Grand Central",
+      "city": "New York",
+      "state": "NY",
+      "zip": "10017",
+      "lat": 40.752733,
+      "lng": -73.976907,
+      "retail_url": "https://www.apple.com/retail/grandcentral/"
+    },
+    {
+      "id": "R612",
+      "name": "Queens Center",
+      "city": "Elmhurst",
+      "state": "NY",
+      "zip": "11373",
+      "lat": 40.73463,
+      "lng": -73.86878,
+      "retail_url": "https://www.apple.com/retail/queenscenter/"
+    },
+    {
+      "id": "R032",
+      "name": "SoHo",
+      "city": "New York",
+      "state": "NY",
+      "zip": "10012",
+      "lat": 40.725058,
+      "lng": -73.999037,
+      "retail_url": "https://www.apple.com/retail/soho/"
+    },
+    {
+      "id": "R152",
+      "name": "Staten Island",
+      "city": "Staten Island",
+      "state": "NY",
+      "zip": "10314",
+      "lat": 40.582432,
+      "lng": -74.165837,
+      "retail_url": "https://www.apple.com/retail/statenisland/"
+    },
+    {
+      "id": "R753",
+      "name": "The Mall at Bay Plaza",
+      "city": "Bronx",
+      "state": "NY",
+      "zip": "10475",
+      "lat": 40.8638,
+      "lng": -73.8269,
+      "retail_url": "https://www.apple.com/retail/themallatbayplaza/"
+    },
+    {
+      "id": "R582",
+      "name": "Upper East Side",
+      "city": "New York",
+      "state": "NY",
+      "zip": "10021",
+      "lat": 40.773584,
+      "lng": -73.964542,
+      "retail_url": "https://www.apple.com/retail/uppereastside/"
+    },
+    {
+      "id": "R251",
+      "name": "Upper West Side",
+      "city": "New York",
+      "state": "NY",
+      "zip": "10023",
+      "lat": 40.775072222222,
+      "lng": -73.982595290736,
+      "retail_url": "https://www.apple.com/retail/upperwestside/"
+    },
+    {
+      "id": "R250",
+      "name": "West 14th Street",
+      "city": "New York",
+      "state": "NY",
+      "zip": "10014",
+      "lat": 40.7412,
+      "lng": -74.00542,
+      "retail_url": "https://www.apple.com/retail/west14thstreet/"
+    },
+    {
+      "id": "R594",
+      "name": "Williamsburg",
+      "city": "Brooklyn",
+      "state": "NY",
+      "zip": "11211",
+      "lat": 40.71557,
+      "lng": -73.95988,
+      "retail_url": "https://www.apple.com/retail/williamsburg/"
+    },
+    {
+      "id": "R654",
+      "name": "World Trade Center",
+      "city": "New York",
+      "state": "NY",
+      "zip": "10007",
+      "lat": 40.711721,
+      "lng": -74.011154,
+      "retail_url": "https://www.apple.com/retail/worldtradecenter/"
+    }
+  ]
+}

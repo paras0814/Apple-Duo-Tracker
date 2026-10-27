@@ -1,0 +1,511 @@
+{
+  "rea_evidence_id": "ev_ec29fb57d1943e71c945c70461abc1a11d1fe0420496706a6601a6b2f55a7823",
+  "rea_version": "6.8.0",
+  "operation": "analyze_javascript_application",
+  "subject": {
+    "architecture": null,
+    "digest": {
+      "sha256": "371836d29ecb72e9c07ad5ed92eb216d06126f347e8c74ed86dc5a6754ae0f62"
+    },
+    "format": "directory",
+    "local_path": "C:\\Users\\PYR_Kicks\\Desktop\\Apple-Duo\\research",
+    "name": "research"
+  },
+  "scope": {
+    "requested_paths": [
+      "0xuypb9i7gi-8.js",
+      "1dibk0bicgbb7.js",
+      "sw.js"
+    ],
+    "unselected_files": 21
+  },
+  "statistics": {
+    "findings": 78,
+    "invalid_utf8_files": 0,
+    "modules": 0,
+    "nested_asar_containers": 0,
+    "parse_failures": 0,
+    "parsed_javascript_files": 3,
+    "relevant_files": 24,
+    "skipped_javascript_files": 0,
+    "text_bytes_read": 74944,
+    "visited_ast_nodes": 9696
+  },
+  "endpoints": [
+    {
+      "node_id": "jag_node_046a5d4f37f26b626ef08ea76b23d0f5aa8e1f7e96e9e4d4e4a68dec6526c6b2",
+      "observations": [
+        {
+          "value": "/api/push",
+          "location": {
+            "available": true,
+            "value": {
+              "end": {
+                "column": 3221,
+                "line": 1
+              },
+              "kind": "source-range",
+              "source": "1dibk0bicgbb7.js",
+              "start": {
+                "column": 3054,
+                "line": 1
+              }
+            }
+          },
+          "confidence": "exact"
+        },
+        {
+          "value": "/api/push",
+          "location": {
+            "available": true,
+            "value": {
+              "end": {
+                "column": 3867,
+                "line": 1
+              },
+              "kind": "source-range",
+              "source": "1dibk0bicgbb7.js",
+              "start": {
+                "column": 3744,
+                "line": 1
+              }
+            }
+          },
+          "confidence": "exact"
+        }
+      ]
+    },
+    {
+      "node_id": "jag_node_0fc81e09f65eaaa196700edb9d7c0f504fbaf623f462aa0a108f1ace647a78f3",
+      "observations": [
+        {
+          "value": "/api/history",
+          "location": {
+            "available": true,
+            "value": {
+              "end": {
+                "column": 10082,
+                "line": 1
+              },
+              "kind": "source-range",
+              "source": "1dibk0bicgbb7.js",
+              "start": {
+                "column": 10042,
+                "line": 1
+              }
+            }
+          },
+          "confidence": "exact"
+        }
+      ]
+    },
+    {
+      "node_id": "jag_node_70f0283b1d42f6a512a68ab7584d1e1cad2ee777b0b0710a2d31f850617793bd",
+      "observations": [
+        {
+          "value": "`/api/history?before=${encodeURIComponent(e.started_at)}`",
+          "location": {
+            "available": true,
+            "value": {
+              "end": {
+                "column": 10952,
+                "line": 1
+              },
+              "kind": "source-range",
+              "source": "1dibk0bicgbb7.js",
+              "start": {
+                "column": 10888,
+                "line": 1
+              }
+            }
+          },
+          "confidence": "exact"
+        }
+      ]
+    },
+    {
+      "node_id": "jag_node_a31622b1b0ae70d2131a1073a167891cc07cbf5acddb763a3938dfc1fcb8b996",
+      "observations": [
+        {
+          "value": "/api/state",
+          "location": {
+            "available": true,
+            "value": {
+              "end": {
+                "column": 13545,
+                "line": 17
+              },
+              "kind": "source-range",
+              "source": "1dibk0bicgbb7.js",
+              "start": {
+                "column": 13507,
+                "line": 17
+              }
+            }
+          },
+          "confidence": "exact"
+        }
+      ]
+    },
+    {
+      "node_id": "jag_node_e2454146dc71d5f9a786dc1478cf8a4161783b6f197dc4734f9c68e3f6540d19",
+      "observations": [
+        {
+          "value": "/api/push/test",
+          "location": {
+            "available": true,
+            "value": {
+              "end": {
+                "column": 3617,
+                "line": 1
+              },
+              "kind": "source-range",
+              "source": "1dibk0bicgbb7.js",
+              "start": {
+                "column": 3491,
+                "line": 1
+              }
+            }
+          },
+          "confidence": "exact"
+        }
+      ]
+    }
+  ],
+  "timers": [
+    {
+      "evidence": {
+        "context_id": "jsrg_evidence_604023f14bdee239ddfd872de1fd3e35f859b9bc8b266aea145bfbdffaa38d46",
+        "location": {
+          "available": true,
+          "value": {
+            "end": {
+              "column": 13114,
+              "line": 17
+            },
+            "kind": "source-range",
+            "source": "1dibk0bicgbb7.js",
+            "start": {
+              "column": 13098,
+              "line": 17
+            }
+          }
+        }
+      },
+      "identity": {
+        "artifact_sha256": "efea99bb585d2d6bcdb244efaa821e93b47c3d29dbc3a50d74f9e707225700b1",
+        "module_path": "1dibk0bicgbb7.js",
+        "role_key": "timer:schedule:31665:31681",
+        "source_range": {
+          "end": {
+            "column": 13114,
+            "line": 17
+          },
+          "start": {
+            "column": 13098,
+            "line": 17
+          }
+        }
+      },
+      "node_id": "jsrg_node_1ae064db7ab665d5b2f980b11774b142aeb6bfd5fa25ab29e20776e1c2a40189",
+      "properties": {
+        "delay_milliseconds": null,
+        "method": "setInterval"
+      }
+    },
+    {
+      "evidence": {
+        "context_id": "jsrg_evidence_604023f14bdee239ddfd872de1fd3e35f859b9bc8b266aea145bfbdffaa38d46",
+        "location": {
+          "available": true,
+          "value": {
+            "end": {
+              "column": 3672,
+              "line": 1
+            },
+            "kind": "source-range",
+            "source": "1dibk0bicgbb7.js",
+            "start": {
+              "column": 3647,
+              "line": 1
+            }
+          }
+        }
+      },
+      "identity": {
+        "artifact_sha256": "efea99bb585d2d6bcdb244efaa821e93b47c3d29dbc3a50d74f9e707225700b1",
+        "module_path": "1dibk0bicgbb7.js",
+        "role_key": "timer:schedule:3647:3672",
+        "source_range": {
+          "end": {
+            "column": 3672,
+            "line": 1
+          },
+          "start": {
+            "column": 3647,
+            "line": 1
+          }
+        }
+      },
+      "node_id": "jsrg_node_5373aec7af19b0c56e8eff290d6b631eddf8e119663ded1f6b4d9fd8c51e4dbb",
+      "properties": {
+        "delay_milliseconds": 4000,
+        "method": "setTimeout"
+      }
+    },
+    {
+      "evidence": {
+        "context_id": "jsrg_evidence_604023f14bdee239ddfd872de1fd3e35f859b9bc8b266aea145bfbdffaa38d46",
+        "location": {
+          "available": true,
+          "value": {
+            "end": {
+              "column": 14803,
+              "line": 17
+            },
+            "kind": "source-range",
+            "source": "1dibk0bicgbb7.js",
+            "start": {
+              "column": 14741,
+              "line": 17
+            }
+          }
+        }
+      },
+      "identity": {
+        "artifact_sha256": "efea99bb585d2d6bcdb244efaa821e93b47c3d29dbc3a50d74f9e707225700b1",
+        "module_path": "1dibk0bicgbb7.js",
+        "role_key": "timer:schedule:33308:33370",
+        "source_range": {
+          "end": {
+            "column": 14803,
+            "line": 17
+          },
+          "start": {
+            "column": 14741,
+            "line": 17
+          }
+        }
+      },
+      "node_id": "jsrg_node_b10d84e998b5e33c3cfb7be205d987422844a3c4aed47000bb797131de141b12",
+      "properties": {
+        "delay_milliseconds": 3000,
+        "method": "setInterval"
+      }
+    },
+    {
+      "evidence": {
+        "context_id": "jsrg_evidence_604023f14bdee239ddfd872de1fd3e35f859b9bc8b266aea145bfbdffaa38d46",
+        "location": {
+          "available": true,
+          "value": {
+            "end": {
+              "column": 11166,
+              "line": 1
+            },
+            "kind": "source-range",
+            "source": "1dibk0bicgbb7.js",
+            "start": {
+              "column": 11104,
+              "line": 1
+            }
+          }
+        }
+      },
+      "identity": {
+        "artifact_sha256": "efea99bb585d2d6bcdb244efaa821e93b47c3d29dbc3a50d74f9e707225700b1",
+        "module_path": "1dibk0bicgbb7.js",
+        "role_key": "timer:schedule:11104:11166",
+        "source_range": {
+          "end": {
+            "column": 11166,
+            "line": 1
+          },
+          "start": {
+            "column": 11104,
+            "line": 1
+          }
+        }
+      },
+      "node_id": "jsrg_node_c04b45e8615a68e5c72839eec884d1a89c07845835b31cae88de4309df3c8735",
+      "properties": {
+        "delay_milliseconds": 30000,
+        "method": "setInterval"
+      }
+    },
+    {
+      "evidence": {
+        "context_id": "jsrg_evidence_604023f14bdee239ddfd872de1fd3e35f859b9bc8b266aea145bfbdffaa38d46",
+        "location": {
+          "available": true,
+          "value": {
+            "end": {
+              "column": 218,
+              "line": 17
+            },
+            "kind": "source-range",
+            "source": "1dibk0bicgbb7.js",
+            "start": {
+              "column": 192,
+              "line": 17
+            }
+          }
+        }
+      },
+      "identity": {
+        "artifact_sha256": "efea99bb585d2d6bcdb244efaa821e93b47c3d29dbc3a50d74f9e707225700b1",
+        "module_path": "1dibk0bicgbb7.js",
+        "role_key": "timer:schedule:18759:18785",
+        "source_range": {
+          "end": {
+            "column": 218,
+            "line": 17
+          },
+          "start": {
+            "column": 192,
+            "line": 17
+          }
+        }
+      },
+      "node_id": "jsrg_node_cf333d31b8d827a1a825712fa70bf5136b1d4343a9cd6e6372bcdf0065ef230c",
+      "properties": {
+        "delay_milliseconds": 2500,
+        "method": "setTimeout"
+      }
+    }
+  ],
+  "sources": {
+    "0xuypb9i7gi-8.js": {
+      "sha256": "62f57ada2a1b58f2e1963d10dccda01cad7a73761f944629a13314194de514ee",
+      "bytes": 33324
+    },
+    "1dibk0bicgbb7.js": {
+      "sha256": "efea99bb585d2d6bcdb244efaa821e93b47c3d29dbc3a50d74f9e707225700b1",
+      "bytes": 40673
+    },
+    "sw.js": {
+      "sha256": "388149087864b88b1dc8c3a20f6f36b11c59ec8e066006472487dd8621fbf954",
+      "bytes": 947
+    },
+    "reference.html": {
+      "sha256": "909ba5533aaa044b284f811fbfe9b2275e40778a4fd8cb05c97b155c7a3617cf",
+      "bytes": 30646
+    },
+    "state.json": {
+      "sha256": "9aad714035ebf823b7a3024e1fb4e0dcc2e2143f4573635d4391d044426c2a16",
+      "bytes": 8177
+    },
+    "history.json": {
+      "sha256": "181e0b4bda7a2a5a6db4bb4b2a1c103437d300722ba5fc40e7b25734eec87dfa",
+      "bytes": 10787
+    }
+  },
+  "source_anchors": {
+    "let e=[{part:": {
+      "source": "0xuypb9i7gi-8.js",
+      "utf8_byte_offset": 152,
+      "excerpt": "let e=[{part:\"MK1E4LL/A\",storage:\"256GB\",color:\"Star White\"},{part:\"MK1F4LL/A\",storage:\"256GB\",color:\"Night Sky\"},{part:\"MK1G4LL/A\",storage:\"512GB\",color:\"Star White\"},{part:\"MK1H4LL/A\",storage:\"512GB\",color:\"Night Sky\"},{part:\"MK1J4LL/A\",storage:\"1TB\",color:\"Star White\"},{part:\"MK1L4LL/A\",storage:\"1TB\",color:\"Night Sky\"},{part:\"MK1Q4LL/A\",storage:"
+    },
+    "let d={name:": {
+      "source": "0xuypb9i7gi-8.js",
+      "utf8_byte_offset": 1185,
+      "excerpt": "let d={name:\"NYC area\",center:{lat:40.754,lng:-73.984},radiusMiles:40,zips:[\"07470\",\"08837\",\"06830\"]},g=i.filter(t=>r(d.center,t)<=d.radiusMiles);t.s([\"K\",0,d,\"b\",0,g,\"F\",0,[\"Night Sky\",\"Star White\"],\"a\",0,e,\"M\",0,[\"256GB\",\"512GB\",\"1TB\",\"2TB\"],\"N\",0,o,\"c\",0,r,\"o\",0,s,\"R\",0,function(t){return n.get(t)},\"O\",0,function(t,a){return\"safari\"===a?o(t,\"saf"
+    },
+    "function o(": {
+      "source": "0xuypb9i7gi-8.js",
+      "utf8_byte_offset": 705,
+      "excerpt": "function o(t,a=\"app\"){let e=s(t);if(!e)return\"https://www.apple.com/shop/buy-iphone/iphone-duo\";let i=`${e.storage.toLowerCase()}-${e.color.toLowerCase().replace(\" \",\"-\")}`,n=`https://www.apple.com/shop/buy-iphone/iphone-duo/7.6-inch-display-${i}-unlocked`;return\"safari\"===a?`${n}?skipul=1#${t}`:n}function r(t,a){let e=t=>t*Math.PI/180,i=e(a.lat-t."
+    },
+    "if(503===a.status)": {
+      "source": "1dibk0bicgbb7.js",
+      "utf8_byte_offset": 32185,
+      "excerpt": "if(503===a.status){var t;let a,s,r;t=Date.now(),a=e=>new Date(t-6e4*e).toISOString(),s=[{store_id:\"R117\",part_number:\"MK1J4LL/A\",changed_at:a(1.2)},{store_id:\"R095\",part_number:\"MK1H4LL/A\",changed_at:a(.4)},{store_id:\"R095\",part_number:\"MK1F4LL/A\",changed_at:a(.3)}],r=[{id:9,store_id:\"R095\",part_number:\"MK1H4LL/A\",started_at:a(.4),ended_at:null},{i"
+    },
+    "r=503===s.status?": {
+      "source": "1dibk0bicgbb7.js",
+      "utf8_byte_offset": 10117,
+      "excerpt": "r=503===s.status?(e=Date.now(),t=[\"R095\",\"R117\",\"R415\",\"R755\",\"R060\",\"R282\",\"R043\",\"R250\",\"R612\",\"R261\"],a=[\"MK1F4LL/A\",\"MK1H4LL/A\",\"MK1J4LL/A\",\"MK1G4LL/A\",\"MK1L4LL/A\",\"MK1E4LL/A\"],{events:Array.from({length:22},(s,r)=>{let n=e-(97*r+r%3*41+4)*6e4;return{id:100-r,store_id:t[r%t.length],part_number:a[5*r%a.length],started_at:new Date(n).toISOString("
+    }
+  },
+  "regional_scope": {
+    "center": {
+      "lat": 40.754,
+      "lng": -73.984
+    },
+    "radius_miles": 40,
+    "total_stores": 29,
+    "nj_stores": [
+      {
+        "id": "R013",
+        "name": "Tice's Corner",
+        "city": "Woodcliff Lake"
+      },
+      {
+        "id": "R043",
+        "name": "Short Hills",
+        "city": "Short Hills"
+      },
+      {
+        "id": "R067",
+        "name": "Menlo Park",
+        "city": "Edison"
+      },
+      {
+        "id": "R103",
+        "name": "Rockaway",
+        "city": "Rockaway"
+      },
+      {
+        "id": "R104",
+        "name": "Bridgewater",
+        "city": "Bridgewater"
+      },
+      {
+        "id": "R117",
+        "name": "Garden State Plaza",
+        "city": "Paramus"
+      },
+      {
+        "id": "R138",
+        "name": "Freehold Raceway Mall",
+        "city": "Freehold"
+      },
+      {
+        "id": "R325",
+        "name": "Willowbrook",
+        "city": "Wayne"
+      },
+      {
+        "id": "R755",
+        "name": "American Dream",
+        "city": "East Rutherford"
+      }
+    ],
+    "excluded_nj_stores": [
+      {
+        "id": "R088",
+        "name": "Sagemore",
+        "city": "Marlton"
+      },
+      {
+        "id": "R206",
+        "name": "Cherry Hill",
+        "city": "Cherry Hill"
+      },
+      {
+        "id": "R549",
+        "name": "Quaker Bridge",
+        "city": "Lawrence Township"
+      }
+    ]
+  },
+  "limitations": [
+    "Caller-selected source analysis leaves 21 inventoried files outside analysis scope. Inventory identity covers the complete artifact; relationships through unselected sources remain unknown.",
+    "CommonJS and ESM binding relationships were recovered from inert syntax and resolved only within the inventoried artifact container.",
+    "Graph coverage is incomplete; unavailable facts remain explicit and must not be read as absence.",
+    "JavaScript and HTML were parsed as inert text; bundle bootstrap code was never executed.",
+    "Static imports, entrypoints, workers, endpoints, and storage relationships do not prove runtime execution.",
+    "Static paths and relationships may remain unresolved when expressions are dynamic or obfuscated.",
+    "Webpack/Rspack factories were recovered from AST literals; REA did not invoke push handlers or bundle bootstrap code."
+  ]
+}
