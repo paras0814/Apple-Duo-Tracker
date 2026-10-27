@@ -1,4 +1,4 @@
-"""Local NJ + NYC pickup monitor. Python 3.11+, standard library only."""
+"""Local NJ + Manhattan pickup monitor. Python 3.11+, standard library only."""
 from __future__ import annotations
 
 import argparse
@@ -46,7 +46,7 @@ def load_config(path):
     timeout = cfg.get("request_timeout_seconds", 4)
     if not isinstance(timeout, (int, float)) or not 0 < timeout <= 30:
         raise ValueError("request_timeout_seconds must be between 0 and 30")
-    zips = cfg.get("seed_zips", ["07470", "08837", "08002", "10475"])
+    zips = cfg.get("seed_zips", ["07470", "08837", "08002"])
     if not isinstance(zips, list) or not zips or any(not isinstance(z, str) or not re.fullmatch(r"\d{5}", z) for z in zips):
         raise ValueError("seed_zips must be a nonempty list of five-digit ZIP strings")
     proxies = cfg.get("proxies", [])
@@ -79,10 +79,12 @@ class NoRedirect(request.HTTPRedirectHandler):
 
 
 class FetchError(Exception):
-    def __init__(self, message, retry_after=0, ambiguous=False):
+    def __init__(self, message, retry_after=0, ambiguous=False, transport=False, status_code=None):
         super().__init__(message)
         self.retry_after = retry_after
         self.ambiguous = ambiguous
+        self.transport = transport
+        self.status_code = status_code
 
 
 def retry_delay(value, now=None):
@@ -126,10 +128,10 @@ def http_json(url, *, proxy=None, payload=None, timeout=4, service="Apple"):
         if service == "Apple" and status_code in (403, 429, 541):
             delay = max(delay, 60)
         exc.close()
-        raise FetchError(f"{service} HTTP {status_code}", retry_after=delay) from None
+        raise FetchError(f"{service} HTTP {status_code}", retry_after=delay, status_code=status_code) from None
     except (error.URLError, TimeoutError, OSError):
         # Exception text can contain a proxy URL. Never include it in logs/API.
-        raise FetchError(f"{service} network/TLS/timeout failure", ambiguous=data is not None) from None
+        raise FetchError(f"{service} network/TLS/timeout failure", ambiguous=data is not None, transport=True) from None
 
 
 def parse_pickup(payload):
@@ -176,16 +178,82 @@ class AppleClient:
         self.cooldowns = {}
         self.last_errors = {}
         self.rotation = 0
+        self.proxy_health = {}
+        self.preferred_proxies = {}
+        self.network_lock = threading.Lock()
+        self.request_count = 0
+        self.failover_count = 0
+        self.diagnostics = {}
 
-    def _query(self, zip_code, proxy):
+    def _query(self, zip_code, proxy, timeout=None):
         params = {"pl": "true", "location": zip_code,
                   **{f"parts.{i}": part for i, part in enumerate(PARTS)}}
+        with self.network_lock:
+            self.request_count += 1
         payload = self.fetch(APPLE_URL + "?" + parse.urlencode(params), proxy=proxy,
-                             timeout=self.cfg["request_timeout_seconds"])
+                             timeout=timeout or self.cfg["request_timeout_seconds"])
         return parse_pickup(payload)
 
+    def _next_proxy(self, excluded, preferred=None):
+        with self.network_lock:
+            proxies = self.cfg["proxies"]
+            now = time.monotonic()
+            if preferred is not None and preferred not in excluded and self.proxy_health.get(preferred, (0, 0))[1] <= now:
+                return preferred, proxies[preferred]
+            for _ in proxies:
+                index = self.rotation % len(proxies)
+                self.rotation += 1
+                _, until = self.proxy_health.get(index, (0, 0))
+                if index not in excluded and until <= now:
+                    return index, proxies[index]
+            remaining = [until - now for _, until in self.proxy_health.values() if until > now]
+            raise FetchError("Configured HTTP proxies are cooling down", retry_after=min(remaining, default=5))
+
+    def _query_with_failover(self, zip_code):
+        if not self.cfg["proxies"]:
+            return self._query(zip_code, None)
+        deadline = time.monotonic() + self.cfg["request_timeout_seconds"]
+        excluded = set()
+        last_error = None
+        for attempt in range(min(2, len(self.cfg["proxies"]))):
+            try:
+                index, proxy = self._next_proxy(excluded, self.preferred_proxies.get(zip_code) if attempt == 0 else None)
+            except FetchError:
+                if last_error:
+                    raise last_error
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            # Reserve part of the normal request budget for one alternate route.
+            timeout = min(remaining, self.cfg["request_timeout_seconds"] / 2) if len(self.cfg["proxies"]) > 1 else remaining
+            try:
+                result = self._query(zip_code, proxy, timeout=max(0.1, timeout))
+                with self.network_lock:
+                    self.proxy_health.pop(index, None)
+                    self.preferred_proxies[zip_code] = index
+                    if attempt:
+                        self.failover_count += 1
+                return result
+            except FetchError as exc:
+                # HTTP rate limits and application errors retain ZIP backoff.
+                # Only transport failures can switch routes within this check.
+                if exc.status_code in (403, 541):
+                    with self.network_lock:
+                        failures = self.proxy_health.get(index, (0, 0))[0] + 1
+                        self.proxy_health[index] = (failures, time.monotonic() + max(300, exc.retry_after))
+                if not exc.transport or exc.retry_after:
+                    raise
+                last_error = exc
+                excluded.add(index)
+                with self.network_lock:
+                    failures = self.proxy_health.get(index, (0, 0))[0] + 1
+                    self.proxy_health[index] = (failures, time.monotonic() + min(300, 30 * 2 ** min(failures - 1, 4)))
+        raise last_error or FetchError("Apple request budget exhausted", transport=True)
+
     def _batch(self, zips):
-        rows, errors, requests = {}, [], 0
+        rows, errors = {}, []
+        before = self.request_count
         jobs = {}
         # Bound concurrency, but keep independent ZIP requests off the poll thread.
         with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
@@ -195,11 +263,7 @@ class AppleClient:
                     remaining = max(1, round(until - time.time()))
                     errors.append(f"ZIP {zip_code}: {self.last_errors.get(zip_code, 'Apple error')}; retry in {remaining}s")
                     continue
-                proxies = self.cfg["proxies"]
-                proxy = proxies[self.rotation % len(proxies)] if proxies else None
-                self.rotation += 1
-                jobs[pool.submit(self._query, zip_code, proxy)] = zip_code
-                requests += 1
+                jobs[pool.submit(self._query_with_failover, zip_code)] = zip_code
             # Iterate submission order so overlapping stores resolve deterministically.
             for future, zip_code in jobs.items():
                 try:
@@ -217,9 +281,10 @@ class AppleClient:
                     message = str(exc) if isinstance(exc, FetchError) else "Invalid Apple response"
                     self.last_errors[zip_code] = message
                     errors.append(f"ZIP {zip_code}: {message}")
-        return rows, errors, requests
+        return rows, errors, self.request_count - before
 
     def sweep(self):
+        previous_failovers = self.failover_count
         rows, errors, requests = self._batch(self.cfg["seed_zips"])
         # Regional ZIPs cover NJ and NYC. Query any missing store's own ZIP
         # when Apple changes its radius/list; missing never means sold out.
@@ -233,6 +298,12 @@ class AppleClient:
                     rows[key] = value
             errors.extend(issues)
             requests += count
+        with self.network_lock:
+            paused = sum(until > time.monotonic() for _, until in self.proxy_health.values())
+            self.diagnostics = {"proxy_count": len(self.cfg["proxies"]),
+                                "proxies_healthy": len(self.cfg["proxies"]) - paused,
+                                "proxies_cooling_down": paused,
+                                "proxy_failovers": self.failover_count - previous_failovers}
         return rows, errors, requests
 
 
@@ -259,9 +330,9 @@ class State:
         self.observed = {}
         self.status = {"last_sweep_at": None, "last_ok_at": None, "requests": 0,
                        "failures": 0, "duration_ms": 0, "errors": [], "sweeps": 0,
-                       "running": True, "discord_last_error": None}
+                       "warnings": [], "request_failures": 0, "running": True, "discord_last_error": None}
 
-    def apply(self, observations, *, errors=(), requests=0, duration_ms=0):
+    def apply(self, observations, *, errors=(), requests=0, duration_ms=0, diagnostics=None):
         now = iso()
         with self.lock, self.db:
             self.observed = copy.deepcopy(observations)
@@ -284,8 +355,12 @@ class State:
                 self.db.execute("INSERT OR REPLACE INTO stock VALUES (?,?,?,?,?,?,?)",
                                 (sid, part, observation["status"], changed, now, observation["title"], event_id))
             known = sum(v["status"] in ("available", "unavailable") for v in observations.values())
-            self.status.update(last_sweep_at=now, requests=requests, failures=len(errors),
-                               errors=list(errors), duration_ms=round(duration_ms), sweeps=self.status["sweeps"] + 1)
+            complete = known == len(STORES) * len(PARTS)
+            self.status.update(last_sweep_at=now, requests=requests, request_failures=len(errors),
+                               failures=0 if complete else len(errors), errors=[] if complete else list(errors),
+                               warnings=list(errors) if complete else [],
+                               duration_ms=round(duration_ms), sweeps=self.status["sweeps"] + 1)
+            self.status.update(diagnostics or {})
             if known == len(STORES) * len(PARTS):
                 self.status["last_ok_at"] = now
 
@@ -355,7 +430,7 @@ def discord_payload(event):
         "fields": [{"name": "Buy this model", "value": f'[Open iPhone Duo {model["storage"]} {model["color"]} on Apple ↗]({product_link})'},
                    {"name": "Apple store", "value": f'[Apple {store["name"]}]({store_link}) · {sid} · {store["zip"]}'},
                    {"name": "Part", "value": part, "inline": True}],
-        "timestamp": event["started_at"], "footer": {"text": "Apple-confirmed 256GB · NJ + NYC Duo Radar"}}]}
+        "timestamp": event["started_at"], "footer": {"text": "Apple-confirmed 256GB · NJ + Manhattan Duo Radar"}}]}
 
 
 def send_discord(cfg, payload, fetch=http_json):
@@ -393,7 +468,8 @@ def poll_once(state, client):
         rows, errors, count = client.sweep()
     except Exception:
         rows, errors, count = {}, ["Unexpected Apple polling error"], 0
-    state.apply(rows, errors=errors, requests=count, duration_ms=(time.monotonic() - start) * 1000)
+    state.apply(rows, errors=errors, requests=count, duration_ms=(time.monotonic() - start) * 1000,
+                diagnostics=client.diagnostics)
     known = sum(v["status"] != "unknown" for v in rows.values())
     LOG.info("Sweep %d: %d/%d products checked; %d request(s); %d error(s)", state.status["sweeps"], known, len(STORES) * len(PARTS), count, len(errors))
 
@@ -498,7 +574,7 @@ def main():
     workers = [threading.Thread(target=fn, args=(state, stop), daemon=True) for fn in (poll_loop, alert_loop)]
     for worker in workers:
         worker.start()
-    LOG.info("NJ + NYC Duo Radar: http://127.0.0.1:%d (keep this process running)", cfg["dashboard_port"])
+    LOG.info("NJ + Manhattan Duo Radar: http://127.0.0.1:%d (keep this process running)", cfg["dashboard_port"])
     try:
         server.serve_forever(poll_interval=0.5)
     finally:

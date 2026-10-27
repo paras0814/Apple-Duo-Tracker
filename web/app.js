@@ -53,7 +53,7 @@ function render() {
   $('connection').className = `connection ${fresh && full ? 'live' : 'offline'}`;
   $('connection-text').textContent = !fresh ? 'Waiting for a fresh sweep' : full ? 'Radar is live' : 'Partial coverage';
   $('coverage').textContent = `${status.stores_seen} / ${stores.length}`;
-  $('intro').textContent = `Two colors. ${stores.length} stores across New Jersey + all five NYC boroughs. A quiet watch for your next pickup.`;
+  $('intro').textContent = `Two colors. ${stores.length} stores across New Jersey + Manhattan. A quiet watch for your next pickup.`;
   $('region-count-all').textContent = stores.length;
   $('region-count-NJ').textContent = stores.filter(s => s.state === 'NJ').length;
   $('region-count-NYC').textContent = stores.filter(s => s.state === 'NY').length;
@@ -63,7 +63,12 @@ function render() {
   $('discord-status').textContent = status.discord_configured ? 'Local configuration loaded · duplicates suppressed' : 'Add your webhook to config.local.json';
   $('last-check').textContent = clock(status.last_sweep_at);
   $('duration').textContent = `${status.requests} requests · ${status.duration_ms}ms`;
-  $('health-note').textContent = `${status.products_verified}/${expectedProducts} product titles verified · ${status.proxy_count ? status.proxy_count + ' local HTTP proxies' : 'Direct Apple connection'} · ${status.sweeps} sweeps`;
+  $('health-note').textContent = `${status.products_verified}/${expectedProducts} product titles verified · ${status.proxy_count ? (status.proxies_healthy ?? status.proxy_count) + '/' + status.proxy_count + ' HTTP proxies ready' : 'Direct Apple connection'} · ${status.sweeps} sweeps`;
+  if (status.proxy_failovers) $('health-note').textContent += ` · ${status.proxy_failovers} connection${status.proxy_failovers === 1 ? '' : 's'} recovered`;
+  const warnings = status.warnings || [];
+  $('network-details').hidden = !warnings.length;
+  $('network-summary').textContent = `All stores covered; ${warnings.length} upstream check${warnings.length === 1 ? '' : 's'} recovered through overlapping responses`;
+  $('network-warnings').textContent = warnings.join('\n');
   const issues = [...status.errors];
   if (status.discord_last_error) issues.push(status.discord_last_error);
   if (!full && status.last_sweep_at) issues.push('Incomplete coverage: unconfirmed products remain unknown.');

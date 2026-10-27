@@ -2,7 +2,7 @@
 
 **Status: live automatic ordering is not implemented or enabled.** This report uses public shipped code, the existing REA investigation, and the local helper's source. No real cart, order, or payment action was performed for this exploration.
 
-**Requested limits:** one 256GB iPhone Duo at a time; either Night Sky `MK1F4LL/A` or Star White `MK1E4LL/A`; unlocked, paid upfront, no AppleCare; pickup at one of the 24 monitored NJ/NYC stores; **maximum final order total $1,300 USD including tax and mandatory fees**. The proposed implementation allows one successful purchase per armed run and requires manual rearming for another.
+**Requested limits:** one 256GB iPhone Duo at a time; either Night Sky `MK1F4LL/A` or Star White `MK1E4LL/A`; unlocked, paid upfront, no AppleCare; pickup at one of the 19 monitored NJ/Manhattan stores; **maximum final order total $1,300 USD including tax and mandatory fees**. The proposed implementation allows one successful purchase per armed run and requires manual rearming for another.
 
 ## What the current implementation establishes
 
@@ -33,4 +33,4 @@ The helper does not choose a pickup store, verify a final price, enforce quantit
 
 - [Local helper source](../web/bookmarklet.js), especially the part allowlist, add-to-bag parameters, response check, and ambiguous-request message.
 - [REA findings](REVERSE-ENGINEERING.md), sections 1, 3, and 7; public frontend source `1dibk0bicgbb7.js` contains the original user-triggered bookmarklet. Parent REA Evidence: `ev_ec29fb57d1943e71c945c70461abc1a11d1fe0420496706a6601a6b2f55a7823`. Static syntax analysis has partial graph coverage and does not establish checkout execution.
-- [Current catalog](../catalog.json) and [browser QA](browser-qa.json): 24 monitored stores, 48 store/part variants, correct encoded helper-copy flow. Clipboard/UI fixtures do not establish a live purchase.
+- [Current catalog](../catalog.json) and [browser QA](browser-qa.json): 19 monitored stores, 38 store/part variants, correct encoded helper-copy flow. Clipboard/UI fixtures do not establish a live purchase.

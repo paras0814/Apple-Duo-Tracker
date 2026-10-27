@@ -1,6 +1,6 @@
 # Apple-Duo-Tracker
 
-Track Apple iPhone availability across **all 12 New Jersey stores and all 12 NYC stores**. A local background monitor checks Apple's pickup endpoint every **5 seconds**, verifies **256GB**, and alerts a Discord channel on initial available stock and subsequent restocks.
+Track Apple iPhone availability across **all 12 New Jersey stores and 7 Manhattan stores**. A local background monitor checks Apple's pickup endpoint every **5 seconds**, verifies **256GB**, and alerts a Discord channel on initial available stock and subsequent restocks.
 
 ## Run on Windows
 
@@ -29,7 +29,7 @@ With an existing Python 3.11+ installation, use `python launcher.py --no-browser
 
 **New Jersey:** American Dream, Bridgewater, Cherry Hill, Freehold Raceway Mall, Garden State Plaza, Menlo Park, Quaker Bridge, Rockaway, Sagemore, Short Hills, Tice's Corner, Willowbrook.
 
-**NYC:** World Trade Center, SoHo, West 14th Street, Grand Central, Fifth Avenue, Upper West Side, Upper East Side, Williamsburg, Downtown Brooklyn, Queens Center, The Mall at Bay Plaza, Staten Island.
+**Manhattan:** World Trade Center, SoHo, West 14th Street, Grand Central, Fifth Avenue, Upper West Side, Upper East Side. Bronx, Queens, Brooklyn, and Staten Island are excluded.
 
 The dashboard includes region/availability filters, store maps, current verification and coverage, alert delivery status, and the latest 100 stock events. Store IDs, ZIPs, and retail links are in `catalog.json`.
 
@@ -49,11 +49,11 @@ Copy `config.example.json` to `config.local.json`. Credentials belong only in th
 http://USER:PASSWORD@proxy.example:10000
 ```
 
-Percent-encode special characters in proxy usernames/passwords. The proxy pool is used for Apple inventory requests; Discord delivery connects directly. Raw upstream/proxy errors are not exposed in logs. The monitor disables inherited system/environment proxies so this local setting is authoritative.
+Percent-encode special characters in proxy usernames/passwords. The proxy pool is used for Apple inventory requests; Discord delivery connects directly. Credential-bearing transport errors are not exposed in logs. A working proxy is reused for each ZIP; transport failures pause that route for 30?300 seconds and allow one alternate proxy within the request budget. HTTP 403/541 pause that proxy for at least five minutes while the ZIP Retry-After remains in force. The dashboard shows how many proxies are ready. If overlapping successful responses still verify every product, failed upstream checks remain visible under connection-recovery details instead of being labeled an inventory outage. The monitor disables inherited system/environment proxies so this local setting is authoritative.
 
 ## Polling and duplicate suppression
 
-The endpoint is `https://www.apple.com/shop/retail/pickup-message?pl=true&location=ZIP&parts.0=MK1F4LL%2FA&parts.1=MK1E4LL%2FA`. The monitor reads `body.stores[].partsAvailability[part].pickupDisplay` and accepts only catalogued store IDs with the expected NJ/NY state. Four regional ZIPs cover the area, with targeted ZIP fallback for missing stores.
+The endpoint is `https://www.apple.com/shop/retail/pickup-message?pl=true&location=ZIP&parts.0=MK1F4LL%2FA&parts.1=MK1E4LL%2FA`. The monitor reads `body.stores[].partsAvailability[part].pickupDisplay` and accepts only catalogued store IDs with the expected NJ/NY state. Three regional ZIPs cover the area, with targeted ZIP fallback for missing stores.
 
 Sweeps start every five seconds under normal conditions and never overlap. Slow requests can extend the interval; Apple errors trigger backoff and `Retry-After` is honored. HTTP 403/429/541 trigger at least a one-minute cooldown. Failed, missing, stale, or unverified data is **unknown**, never fabricated stock or a sold-out transition.
 
@@ -72,9 +72,9 @@ Tests cover product/storage/state validation, initial/restock transitions, resta
 
 The public reference was investigated with [REA](https://github.com/morluto/rea), its reverse-engineering skill, and its static JavaScript analyzer. See **[the evidence-backed report](research/REVERSE-ENGINEERING.md)**.
 
-The reference's browser polls every **3 seconds** while visible; its five-second backend cadence is advertised, with private implementation unavailable. Its 29-store region includes only **9 NJ stores**, so this monitor adds the missing NJ locations and the full NYC list. The reference also has a 503 demo-stock fallback; this monitor exposes real failures.
+The reference's browser polls every **3 seconds** while visible; its five-second backend cadence is advertised, with private implementation unavailable. Its 29-store region includes only **9 NJ stores**, so this monitor adds the missing NJ locations and the requested Manhattan stores. The reference also has a 503 demo-stock fallback; this monitor exposes real failures.
 
-REA 6.8.0 was installed through `npx rea-agents@latest setup` after plan approval, and its Codex registration/skill and an actual stdio MCP handshake were verified (229 tools). Restart Codex to load the newly registered tools. The separate `rea/` source checkout was also built and used for the investigation; it is excluded from this repository. `Run-REA.cmd` uses that existing checkout/runtime. A fresh clone can install REA through the upstream instructions.
+REA 6.8.0 was installed through `npx rea-agents@latest setup` after plan approval, and its Codex registration/skill and an actual stdio MCP handshake were verified (229 tools). The REA MCP tools are now connected in the active Codex session. The separate `rea/` source checkout was also built and used for the investigation; it is excluded from this repository. `Run-REA.cmd` uses that existing checkout/runtime. A fresh clone can install REA through the upstream instructions.
 
 Downloaded reference scripts, full generated evidence, screenshots, local setup diagnostics, runtime binaries, credentials, and monitoring data stay local. The compact findings and provenance report are versioned.
 

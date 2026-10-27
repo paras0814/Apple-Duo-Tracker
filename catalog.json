@@ -131,16 +131,6 @@
       "retail_url": "https://www.apple.com/retail/willowbrook/"
     },
     {
-      "id": "R715",
-      "name": "Downtown Brooklyn",
-      "city": "Brooklyn",
-      "state": "NY",
-      "zip": "11217",
-      "lat": 40.685612,
-      "lng": -73.978247,
-      "retail_url": "https://www.apple.com/retail/downtownbrooklyn/"
-    },
-    {
       "id": "R095",
       "name": "Fifth Avenue",
       "city": "New York",
@@ -161,16 +151,6 @@
       "retail_url": "https://www.apple.com/retail/grandcentral/"
     },
     {
-      "id": "R612",
-      "name": "Queens Center",
-      "city": "Elmhurst",
-      "state": "NY",
-      "zip": "11373",
-      "lat": 40.73463,
-      "lng": -73.86878,
-      "retail_url": "https://www.apple.com/retail/queenscenter/"
-    },
-    {
       "id": "R032",
       "name": "SoHo",
       "city": "New York",
@@ -179,26 +159,6 @@
       "lat": 40.725058,
       "lng": -73.999037,
       "retail_url": "https://www.apple.com/retail/soho/"
-    },
-    {
-      "id": "R152",
-      "name": "Staten Island",
-      "city": "Staten Island",
-      "state": "NY",
-      "zip": "10314",
-      "lat": 40.582432,
-      "lng": -74.165837,
-      "retail_url": "https://www.apple.com/retail/statenisland/"
-    },
-    {
-      "id": "R753",
-      "name": "The Mall at Bay Plaza",
-      "city": "Bronx",
-      "state": "NY",
-      "zip": "10475",
-      "lat": 40.8638,
-      "lng": -73.8269,
-      "retail_url": "https://www.apple.com/retail/themallatbayplaza/"
     },
     {
       "id": "R582",
@@ -229,16 +189,6 @@
       "lat": 40.7412,
       "lng": -74.00542,
       "retail_url": "https://www.apple.com/retail/west14thstreet/"
-    },
-    {
-      "id": "R594",
-      "name": "Williamsburg",
-      "city": "Brooklyn",
-      "state": "NY",
-      "zip": "11211",
-      "lat": 40.71557,
-      "lng": -73.95988,
-      "retail_url": "https://www.apple.com/retail/williamsburg/"
     },
     {
       "id": "R654",

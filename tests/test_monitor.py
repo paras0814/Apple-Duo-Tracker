@@ -53,14 +53,15 @@ class ProductTests(unittest.TestCase):
     def test_catalog_has_exact_two_256gb_parts_and_nj_nyc_allowlist(self):
         self.assertEqual(set(m.PARTS), {"MK1F4LL/A", "MK1E4LL/A"})
         self.assertTrue(all(p["storage"] == "256GB" for p in m.PARTS.values()))
-        self.assertEqual(len(m.STORES), 24)
+        self.assertEqual(len(m.STORES), 19)
         self.assertEqual(sum(s["state"] == "NJ" for s in m.STORES.values()), 12)
-        self.assertEqual(sum(s["state"] == "NY" for s in m.STORES.values()), 12)
+        self.assertEqual(sum(s["state"] == "NY" for s in m.STORES.values()), 7)
         self.assertTrue({"R654", "R032", "R250", "R415"} <= set(m.STORES))
+        self.assertFalse({"R753", "R612", "R152", "R594", "R715"} & set(m.STORES))
 
     def test_apple_product_titles_verify_both_colors(self):
         result = m.parse_pickup(payload("available"))
-        self.assertEqual(len(result), 48)
+        self.assertEqual(len(result), 38)
         self.assertTrue(all(r["status"] == "available" and r["verified"] for r in result.values()))
 
     def test_wrong_storage_color_model_and_part_never_trigger_stock(self):
@@ -81,7 +82,7 @@ class ProductTests(unittest.TestCase):
         data["body"]["stores"][1]["partsAvailability"]["MK1H4LL/A"] = {"pickupDisplay": "available"}
         result = m.parse_pickup(data)
         self.assertNotIn(("R755", "MK1F4LL/A"), result)
-        self.assertEqual(len(result), 46)
+        self.assertEqual(len(result), 36)
 
     def test_missing_and_unfamiliar_status_are_unknown(self):
         for display in (None, "ineligible", "Available", "", "availableSoon"):
@@ -118,11 +119,11 @@ class TransitionTests(unittest.TestCase):
     def test_initial_available_alerts_once_per_store_and_part(self):
         self.state.apply(observations("available"))
         self.state.apply(observations("available"))
-        self.assertEqual(len(self.state.snapshot()["events"]), 48)
+        self.assertEqual(len(self.state.snapshot()["events"]), 38)
         event = self.state.claim_alert()
         self.assertEqual(event["kind"], "initial")
         self.state.complete_alert(event, message_id="123")
-        for _ in range(47):
+        for _ in range(37):
             other = self.state.claim_alert()
             self.state.complete_alert(other, message_id="456")
         self.assertIsNone(self.state.claim_alert())
@@ -132,12 +133,12 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(self.state.snapshot()["events"], [])
         self.state.apply(observations("available"))
         self.state.apply(observations("available"))
-        self.assertEqual(len(self.state.snapshot()["events"]), 48)
+        self.assertEqual(len(self.state.snapshot()["events"]), 38)
         self.assertTrue(all(e["kind"] == "restock" for e in self.state.snapshot()["events"]))
         self.state.apply(observations("unavailable"))
         self.assertTrue(all(e["ended_at"] and e["delivery"] == "expired" for e in self.state.snapshot()["events"]))
         self.state.apply(observations("available"))
-        self.assertEqual(len(self.state.snapshot()["events"]), 96)
+        self.assertEqual(len(self.state.snapshot()["events"]), 76)
 
     def test_network_error_does_not_rearm_an_available_item(self):
         self.state.apply(observations("available"))
@@ -146,7 +147,7 @@ class TransitionTests(unittest.TestCase):
         self.assertTrue(all(r["status"] == "unknown" and r["last_known"] == "available" for r in snap["rows"]))
         self.assertIsNone(self.state.claim_alert())
         self.state.apply(observations("available"))
-        self.assertEqual(len(self.state.snapshot()["events"]), 48)
+        self.assertEqual(len(self.state.snapshot()["events"]), 38)
 
     def test_restart_preserves_dedup_and_requires_fresh_confirmation(self):
         self.state.apply(observations("available"))
@@ -156,7 +157,7 @@ class TransitionTests(unittest.TestCase):
         self.state = m.State(self.db, config())
         self.assertIsNone(self.state.claim_alert())
         self.state.apply(observations("available"))
-        self.assertEqual(len(self.state.snapshot()["events"]), 48)
+        self.assertEqual(len(self.state.snapshot()["events"]), 38)
         delivered = [e for e in self.state.snapshot()["events"] if e["delivery"] == "delivered"]
         self.assertEqual(len(delivered), 1)
         self.assertNotEqual(self.state.claim_alert()["id"], event["id"])
@@ -186,8 +187,91 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(saved["delivery"], "pending")
         self.assertNotIn("local_test_secret", json.dumps(self.state.snapshot()))
 
+    def test_recovered_coverage_retains_request_warning_without_false_outage(self):
+        issue = "ZIP 08837: Apple network/TLS/timeout failure"
+        self.state.apply(observations("unavailable"), errors=[issue])
+        status = self.state.snapshot()["status"]
+        self.assertEqual(status["errors"], [])
+        self.assertEqual(status["warnings"], [issue])
+        self.assertEqual(status["request_failures"], 1)
+        self.assertEqual(status["failures"], 0)
+        partial = observations("unavailable")
+        partial.pop(("R755", "MK1F4LL/A"))
+        self.state.apply(partial, errors=[issue])
+        status = self.state.snapshot()["status"]
+        self.assertEqual(status["errors"], [issue])
+        self.assertEqual(status["warnings"], [])
+        self.assertEqual(status["failures"], 1)
+
 
 class NetworkTests(unittest.TestCase):
+    def test_transport_failure_uses_another_proxy_and_cools_down_failed_route(self):
+        cfg = config()
+        cfg["seed_zips"] = ["07470"]
+        cfg["proxies"] = ["http://proxy-a.example:10000", "http://proxy-b.example:10000", "http://proxy-c.example:10000"]
+        calls = []
+        def fetch(url, **kwargs):
+            calls.append(kwargs["proxy"])
+            if kwargs["proxy"] == cfg["proxies"][0]:
+                raise m.FetchError("Apple network/TLS/timeout failure", transport=True)
+            return payload()
+        client = m.AppleClient(cfg, fetch)
+        rows, errors, count = client.sweep()
+        self.assertEqual((len(rows), errors, count), (38, [], 2))
+        self.assertEqual(client.diagnostics["proxy_failovers"], 1)
+        self.assertEqual(client.diagnostics["proxies_cooling_down"], 1)
+        self.assertEqual(client.diagnostics["proxies_healthy"], 2)
+        client.sweep()
+        self.assertEqual(calls.count(cfg["proxies"][0]), 1)
+        self.assertEqual(calls[-1], cfg["proxies"][1])
+
+    def test_rejected_proxy_cools_down_but_zip_retry_after_is_respected(self):
+        cfg = config()
+        cfg["seed_zips"] = ["07470"]
+        cfg["proxies"] = ["http://proxy-a.example:10000", "http://proxy-b.example:10000"]
+        calls = []
+        def fetch(url, **kwargs):
+            calls.append(kwargs["proxy"])
+            if kwargs["proxy"] == cfg["proxies"][0]:
+                raise m.FetchError("Apple HTTP 541", retry_after=60, status_code=541)
+            return payload()
+        client = m.AppleClient(cfg, fetch)
+        self.assertEqual(client.sweep()[2], 1)
+        self.assertEqual(client.diagnostics["proxies_cooling_down"], 1)
+        self.assertEqual(client.sweep()[2], 0)
+        self.assertEqual(len(client._query_with_failover("08837")), 38)
+        self.assertEqual(calls, cfg["proxies"])
+
+    def test_rate_limit_does_not_switch_proxy_to_evade_backoff(self):
+        cfg = config()
+        cfg["seed_zips"] = ["07470"]
+        cfg["proxies"] = ["http://proxy-a.example:10000", "http://proxy-b.example:10000"]
+        calls = []
+        def fetch(url, **kwargs):
+            calls.append(kwargs["proxy"])
+            raise m.FetchError("Apple HTTP 429", retry_after=60)
+        client = m.AppleClient(cfg, fetch)
+        self.assertEqual(client.sweep()[2], 1)
+        self.assertEqual(client.sweep()[2], 0)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(client.diagnostics["proxy_failovers"], 0)
+
+    def test_all_bad_proxies_stop_without_direct_fallback_or_request_storm(self):
+        cfg = config()
+        cfg["seed_zips"] = ["07470"]
+        cfg["proxies"] = ["http://proxy-a.example:10000", "http://proxy-b.example:10000"]
+        calls = []
+        def fetch(url, **kwargs):
+            calls.append(kwargs["proxy"])
+            raise m.FetchError("Apple network/TLS/timeout failure", transport=True)
+        client = m.AppleClient(cfg, fetch)
+        rows, errors, count = client.sweep()
+        self.assertEqual((rows, count), ({}, 2))
+        self.assertEqual(len(errors), 1)
+        self.assertNotIn(None, calls)
+        self.assertEqual(client.diagnostics["proxies_healthy"], 0)
+        self.assertEqual(client.sweep()[2], 0)
+
     def test_live_http_fixture_checks_both_parts_then_delivers_one_confirmed_message(self):
         captured = []
         class Fixture(BaseHTTPRequestHandler):
@@ -204,7 +288,7 @@ class NetworkTests(unittest.TestCase):
             base = f"http://127.0.0.1:{server.server_port}"
             with patch.object(m, "APPLE_URL", base + "/pickup"):
                 rows, errors, count = m.AppleClient(config()).sweep()
-            self.assertEqual((len(rows), errors, count), (48, [], 3))
+            self.assertEqual((len(rows), errors, count), (38, [], 3))
             for query in captured:
                 self.assertEqual(query["parts.0"], ["MK1F4LL/A"])
                 self.assertEqual(query["parts.1"], ["MK1E4LL/A"])
@@ -226,7 +310,7 @@ class NetworkTests(unittest.TestCase):
             calls.append(zip_code)
             return payload(ids=["R088"] if zip_code == "08053" else [sid for sid in m.STORES if sid != "R088"])
         rows, errors, count = m.AppleClient(config(), fetch).sweep()
-        self.assertEqual(len(rows), 48)
+        self.assertEqual(len(rows), 38)
         self.assertEqual(count, 4)
         self.assertIn("08053", calls)
 
