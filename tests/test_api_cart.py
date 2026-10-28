@@ -115,6 +115,18 @@ class TransportTests(unittest.TestCase):
     def tearDown(self):
         self.client.close();self.temp.cleanup()
 
+    def test_discarded_proxy_session_cookies_do_not_return_when_reopened(self):
+        self.client._jar.set_cookie(cookie('shld_bt_ck', 'rejected|4102444800'))
+        self.client._save()
+        self.client.discard_session()
+        self.assertTrue(self.session.closed)
+        reopened = AppleClient(self.root, 'fixture-run', session_factory=FakeSession)
+        try:
+            self.assertIsNone(reopened.get_cookie('shld_bt_ck'))
+            self.assertFalse(reopened.verification_cookie_valid())
+        finally:
+            reopened.close()
+
     def test_direct_chrome_profile_no_proxy_no_retry_tls_and_private_persistence(self):
         self.assertEqual(self.session.options["impersonate"],"chrome152")
         self.assertIs(self.session.options["trust_env"],False)

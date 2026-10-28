@@ -82,7 +82,7 @@ function render() {
   $('discord-status').textContent = status.discord_configured ? 'Local configuration loaded · duplicates suppressed' : 'Add your webhook to config.local.json';
   $('last-check').textContent = clock(status.last_sweep_at);
   $('duration').textContent = `${status.requests} requests · ${status.duration_ms}ms`;
-  $('health-note').textContent = `${status.products_verified}/${expectedProducts} product titles verified · ${status.proxy_count ? (status.proxies_healthy ?? status.proxy_count) + '/' + status.proxy_count + ' HTTP proxies ready' : 'Direct Apple connection'} · ${status.sweeps} sweeps`;
+  $('health-note').textContent = `${status.products_verified}/${expectedProducts} product titles verified · ${status.proxy_count ? (status.proxies_healthy ?? status.proxy_count) + '/' + status.proxy_count + ' HTTP proxies eligible' : 'Direct Apple connection'} · ${status.sweeps} sweeps`;
   if (status.proxy_failovers) $('health-note').textContent += ` · ${status.proxy_failovers} connection${status.proxy_failovers === 1 ? '' : 's'} recovered`;
   const warnings = status.warnings || [];
   $('network-details').hidden = !warnings.length;

@@ -303,6 +303,27 @@ class NetworkTests(unittest.TestCase):
         self.assertEqual(client.diagnostics["proxies_healthy"], 0)
         self.assertEqual(client.sweep()[2], 0)
 
+    def test_route_cooldown_does_not_accumulate_a_second_zip_backoff(self):
+        cfg = config(); cfg['seed_zips'] = ['07470']
+        cfg['proxies'] = ['http://proxy.example:10000']
+        calls = []; healthy = False
+        def fetch(url, **kwargs):
+            calls.append(kwargs['proxy'])
+            if not healthy: raise m.FetchError('Apple transport failure', transport=True)
+            return payload('unavailable')
+        client = m.AppleClient(cfg, fetch)
+        for elapsed in (0, 6, 12, 18, 24):
+            with patch.object(m.time, 'time', return_value=1000 + elapsed), patch.object(m.time, 'monotonic', return_value=1000 + elapsed):
+                rows, errors, _ = client.sweep()
+                self.assertEqual(rows, {})
+                self.assertLessEqual(client.cooldowns['07470'][1], 1005 + elapsed)
+        self.assertEqual(len(calls), 1)
+        healthy = True
+        with patch.object(m.time, 'time', return_value=1031), patch.object(m.time, 'monotonic', return_value=1031):
+            rows, errors, _ = client.sweep()
+        self.assertEqual((len(rows), errors), (38, []))
+        self.assertEqual(len(calls), 2)
+
     def test_live_http_fixture_checks_both_parts_then_delivers_one_confirmed_message(self):
         captured = []
         class Fixture(BaseHTTPRequestHandler):
@@ -466,6 +487,37 @@ class VerifiedProxyTests(unittest.TestCase):
         client.sweep(); clients[0].valid = False; client.sweep()
         self.assertEqual(clients[0].verifies, 2)
         self.assertEqual(len(clients), 1)
+
+    def test_rejected_session_is_closed_and_replaced_after_route_cooldown(self):
+        cfg, clients, names, client = self.setup_client((541, 200))
+        cfg['proxies'] = cfg['proxies'][:1]
+        now = time.time(); mono = time.monotonic()
+        with patch.object(m.time, 'time', return_value=now), patch.object(m.time, 'monotonic', return_value=mono):
+            rows, errors, _ = client.sweep()
+        self.assertEqual(rows, {})
+        self.assertTrue(clients[0].valid)  # A future cookie alone did not prove usability.
+        self.assertTrue(clients[0]._session.closed)
+        self.assertEqual(client.proxy_clients, {})
+        self.assertEqual(client.proxy_started, set())
+        with patch.object(m.time, 'time', return_value=now + 301), patch.object(m.time, 'monotonic', return_value=mono + 301):
+            rows, errors, _ = client.sweep()
+        self.assertEqual((len(rows), errors), (38, []))
+        self.assertEqual([c.verifies for c in clients], [1, 1])
+        self.assertEqual(client.diagnostics['proxy_session_resets'], 1)
+
+    def test_transport_failure_discards_the_handle_without_exposing_exception_credentials(self):
+        cfg, clients, names, client = self.setup_client()
+        def factory(root, run):
+            obj = self.Verified(); clients.append(obj)
+            def fail(*args, **kwargs): raise OSError('PRIVATE_PROXY_PASSWORD')
+            obj.request = fail
+            return obj
+        client.verified_factory = factory
+        rows, errors, _ = client.sweep()
+        self.assertEqual(rows, {})
+        self.assertTrue(clients[0]._session.closed)
+        self.assertEqual(client.proxy_clients, {})
+        self.assertNotIn('PRIVATE_PROXY_PASSWORD', json.dumps(errors) + json.dumps(client.diagnostics))
 
 
 class VerifiedDirectTests(unittest.TestCase):

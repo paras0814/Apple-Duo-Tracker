@@ -85,12 +85,13 @@ class NoRedirect(request.HTTPRedirectHandler):
 
 
 class FetchError(Exception):
-    def __init__(self, message, retry_after=0, ambiguous=False, transport=False, status_code=None):
+    def __init__(self, message, retry_after=0, ambiguous=False, transport=False, status_code=None, route_failure=False):
         super().__init__(message)
         self.retry_after = retry_after
         self.ambiguous = ambiguous
         self.transport = transport
         self.status_code = status_code
+        self.route_failure = route_failure
 
 
 class ProxySession:
@@ -227,6 +228,7 @@ class AppleClient:
         self.proxy_clients = {}
         self.proxy_locks = {}
         self.proxy_started = set()
+        self.proxy_session_resets = 0
 
     def _verified(self):
         if self.verified_client is not None or self.verified_setup_failed:
@@ -305,6 +307,21 @@ class AppleClient:
         for client in self.proxy_clients.values():
             client.close()
 
+    def _discard_proxy_session(self, proxy):
+        # Called while holding this route's lock, so another ZIP cannot use the
+        # rejected handle while it is being closed or clear a replacement jar.
+        client = self.proxy_clients.pop(proxy, None)
+        self.proxy_started.discard(proxy)
+        if client is not None:
+            try:
+                discard = getattr(client, "discard_session", client.close)
+                discard()
+            except Exception:
+                # A failed cookie write must not keep a rejected live handle.
+                try: client.close()
+                except Exception: pass
+            self.proxy_session_resets += 1
+
     def _query_verified_proxy(self, proxy, url, timeout):
         # Keep injected legacy HTTP fixtures offline, as with direct mode.
         if self.verified_factory is None and self.fetch is not http_json:
@@ -334,6 +351,8 @@ class AppleClient:
                 response = client.request("GET", url)
             except Exception as exc:
                 status = getattr(exc, "status", None)
+                if status is None or status in (403, 541):
+                    self._discard_proxy_session(proxy)
                 raise FetchError("Apple proxy session/network/TLS/timeout failure", transport=status is None,
                                  status_code=status, retry_after=60 if status == 429 else 0) from None
             delay = retry_delay(response.headers.get("retry-after"))
@@ -342,6 +361,8 @@ class AppleClient:
                 except Exception: raise FetchError("Apple returned invalid JSON") from None
             if response.status == 429:
                 delay = max(delay, 60)
+            if response.status in (403, 541):
+                self._discard_proxy_session(proxy)
             raise FetchError(f"Apple HTTP {response.status}", retry_after=delay, status_code=response.status)
 
     def _query(self, zip_code, proxy, timeout=None):
@@ -371,7 +392,7 @@ class AppleClient:
                 if index not in excluded and until <= now:
                     return index, proxies[index]
             remaining = [until - now for _, until in self.proxy_health.values() if until > now]
-            raise FetchError("Configured HTTP proxies are cooling down", retry_after=min(remaining, default=5))
+            raise FetchError("Configured HTTP proxies are cooling down", retry_after=min(remaining, default=5), route_failure=True)
 
     def _query_with_failover(self, zip_code):
         if self.connection == "direct" or not self.cfg["proxies"]:
@@ -403,19 +424,17 @@ class AppleClient:
                 # A proxy-specific rejection is different from an explicit
                 # upstream rate limit. Never manufacture ZIP Retry-After for it.
                 rejected_route = exc.status_code in (403, 541)
-                if rejected_route:
+                if rejected_route or exc.transport:
                     with self.network_lock:
                         failures = self.proxy_health.get(index, (0, 0))[0] + 1
-                        self.proxy_health[index] = (failures, time.monotonic() + max(300, exc.retry_after))
+                        delay = max(300, exc.retry_after) if rejected_route else min(300, 30 * 2 ** min(failures - 1, 4))
+                        self.proxy_health[index] = (failures, time.monotonic() + delay)
                 if (not exc.transport and not rejected_route) or exc.retry_after:
                     raise
+                exc.route_failure = True
                 last_error = exc
                 excluded.add(index)
-                with self.network_lock:
-                    failures = self.proxy_health.get(index, (0, 0))[0] + 1
-                    prior_until = self.proxy_health.get(index, (0, 0))[1]
-                    self.proxy_health[index] = (failures, max(prior_until, time.monotonic() + min(300, 30 * 2 ** min(failures - 1, 4))))
-        raise last_error or FetchError("Apple request budget exhausted", transport=True)
+        raise last_error or FetchError("Apple request budget exhausted", transport=True, route_failure=True)
 
     def _batch(self, zips):
         rows, errors = {}, []
@@ -442,8 +461,12 @@ class AppleClient:
                             rows[key] = value
                 except Exception as exc:
                     failures = self.cooldowns.get(zip_code, (0, 0))[0] + 1
-                    local_delay = self.cfg["interval_seconds"] if self.connection == "direct" else min(300, 5 * 2 ** min(failures - 1, 6))
-                    delay = max(local_delay, getattr(exc, "retry_after", 0))
+                    route_failure = isinstance(exc, FetchError) and exc.route_failure
+                    local_delay = self.cfg["interval_seconds"] if self.connection == "direct" or route_failure else min(300, 5 * 2 ** min(failures - 1, 6))
+                    # Route availability is checked every normal sweep. It can
+                    # recover when another ZIP finds a usable proxy; do not add
+                    # a separate exponential ZIP blackout to proxy cooldowns.
+                    delay = local_delay if route_failure else max(local_delay, getattr(exc, "retry_after", 0))
                     self.cooldowns[zip_code] = (failures, time.time() + delay)
                     message = str(exc) if isinstance(exc, FetchError) else "Invalid Apple response"
                     self.last_errors[zip_code] = message
@@ -476,6 +499,7 @@ class AppleClient:
                                 "proxies_cooling_down": paused if active else 0,
                                 "proxy_failovers": self.failover_count - previous_failovers,
                                 "direct_session_renewals": self.direct_renewals,
+                                "proxy_session_resets": self.proxy_session_resets,
                                 "transport_warning": "Run Setup-API.cmd for verified direct monitoring." if self.verified_setup_failed else None}
         return rows, errors, requests
 

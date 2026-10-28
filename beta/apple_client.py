@@ -336,6 +336,15 @@ class AppleClient:
                 "origin":origin, "client_profile":client_profile,
                 "cart_mutations":0, "payment_submitted":False}
 
+    def discard_session(self):
+        """Forget a rejected private session before replacing its transport."""
+        with self._lock:
+            self._jar.clear()
+            try:
+                self._save()
+            finally:
+                self._session.close()
+
     def close(self):
         with self._lock:
             try:
