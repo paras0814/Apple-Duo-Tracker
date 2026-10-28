@@ -1,9 +1,10 @@
-"""Local NJ + Manhattan pickup monitor. Python 3.11+, standard library only."""
+"""Local NJ + Manhattan pickup monitor. Python 3.11+ with private verified HTTP transport."""
 from __future__ import annotations
 
 import argparse
 import concurrent.futures
 import copy
+import hashlib
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import html
@@ -90,6 +91,26 @@ class FetchError(Exception):
         self.ambiguous = ambiguous
         self.transport = transport
         self.status_code = status_code
+
+
+class ProxySession:
+    """Bind every request in one verified session to the same configured route."""
+    def __init__(self, session, proxy, timeout):
+        self._session = session
+        self._proxy = proxy
+        self.timeout = timeout
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
+
+    def request(self, *args, **kwargs):
+        # The checkout client explicitly disables proxies on each request.
+        # Override that only inside this monitor-owned adapter, including its
+        # bootstrap requests. Checkout keeps its original direct transport.
+        kwargs.pop("proxies", None)
+        kwargs["proxy"] = self._proxy
+        kwargs["timeout"] = min(float(kwargs.get("timeout", self.timeout)), self.timeout)
+        return self._session.request(*args, **kwargs)
 
 
 def retry_delay(value, now=None):
@@ -203,6 +224,9 @@ class AppleClient:
         self.verified_started = False
         self.direct_renewals = 0
         self.direct_recovery_used = False
+        self.proxy_clients = {}
+        self.proxy_locks = {}
+        self.proxy_started = set()
 
     def _verified(self):
         if self.verified_client is not None or self.verified_setup_failed:
@@ -278,6 +302,47 @@ class AppleClient:
     def close(self):
         if self.verified_client is not None:
             self.verified_client.close()
+        for client in self.proxy_clients.values():
+            client.close()
+
+    def _query_verified_proxy(self, proxy, url, timeout):
+        # Keep injected legacy HTTP fixtures offline, as with direct mode.
+        if self.verified_factory is None and self.fetch is not http_json:
+            with self.network_lock: self.request_count += 1
+            return self.fetch(url, proxy=proxy, timeout=timeout)
+        with self.network_lock:
+            route_lock = self.proxy_locks.setdefault(proxy, threading.RLock())
+        with route_lock:
+            client = self.proxy_clients.get(proxy)
+            if client is None:
+                try:
+                    from beta.apple_client import AppleClient as VerifiedClient
+                    factory = self.verified_factory or VerifiedClient
+                    identity = hashlib.sha256(proxy.encode()).hexdigest()[:20]
+                    family = "stock-monitor" if set(self.parts) == set(PARTS) else "stock-diagnostic"
+                    client = factory(ROOT, family + "-proxy-" + identity)
+                    client._session = ProxySession(client._session, proxy, timeout)
+                    self.proxy_clients[proxy] = client
+                except Exception:
+                    raise FetchError("Verified proxy transport unavailable; run Setup-API.cmd", retry_after=60) from None
+            client._session.timeout = timeout
+            try:
+                if proxy not in self.proxy_started or not client.verification_cookie_valid("https://www.apple.com"):
+                    client.verify_session("https://www.apple.com", client_profile="public_v3_proof")
+                    self.proxy_started.add(proxy)
+                with self.network_lock: self.request_count += 1
+                response = client.request("GET", url)
+            except Exception as exc:
+                status = getattr(exc, "status", None)
+                raise FetchError("Apple proxy session/network/TLS/timeout failure", transport=status is None,
+                                 status_code=status, retry_after=60 if status == 429 else 0) from None
+            delay = retry_delay(response.headers.get("retry-after"))
+            if response.status == 200:
+                try: return response.json()
+                except Exception: raise FetchError("Apple returned invalid JSON") from None
+            if response.status == 429:
+                delay = max(delay, 60)
+            raise FetchError(f"Apple HTTP {response.status}", retry_after=delay, status_code=response.status)
 
     def _query(self, zip_code, proxy, timeout=None):
         params = {"pl": "true", "location": zip_code,
@@ -286,10 +351,11 @@ class AppleClient:
         if self.connection == "direct":
             payload = self._query_verified_direct(zip_code, url)
             return parse_pickup(payload, parts=self.parts, product_name=self.product_name)
-        with self.network_lock:
-            self.request_count += 1
-        payload = self.fetch(url, proxy=proxy,
-                             timeout=timeout or self.cfg["request_timeout_seconds"])
+        if proxy:
+            payload = self._query_verified_proxy(proxy, url, timeout or self.cfg["request_timeout_seconds"])
+        else:
+            with self.network_lock: self.request_count += 1
+            payload = self.fetch(url, proxy=None, timeout=timeout or self.cfg["request_timeout_seconds"])
         return parse_pickup(payload, parts=self.parts, product_name=self.product_name)
 
     def _next_proxy(self, excluded, preferred=None):
@@ -347,7 +413,8 @@ class AppleClient:
                 excluded.add(index)
                 with self.network_lock:
                     failures = self.proxy_health.get(index, (0, 0))[0] + 1
-                    self.proxy_health[index] = (failures, time.monotonic() + min(300, 30 * 2 ** min(failures - 1, 4)))
+                    prior_until = self.proxy_health.get(index, (0, 0))[1]
+                    self.proxy_health[index] = (failures, max(prior_until, time.monotonic() + min(300, 30 * 2 ** min(failures - 1, 4))))
         raise last_error or FetchError("Apple request budget exhausted", transport=True)
 
     def _batch(self, zips):
@@ -402,7 +469,7 @@ class AppleClient:
         with self.network_lock:
             paused = sum(until > time.monotonic() for _, until in self.proxy_health.values())
             active = len(self.cfg["proxies"]) if self.connection == "proxy" else 0
-            mode = "proxy" if self.connection == "proxy" else "verified_direct" if self.verified_client is not None else "direct_unverified"
+            mode = ("verified_proxy" if self.proxy_clients else "proxy") if self.connection == "proxy" else "verified_direct" if self.verified_client is not None else "direct_unverified"
             self.diagnostics = {"proxy_count": active, "configured_proxy_count": len(self.cfg["proxies"]),
                                 "monitor_connection": self.connection, "connection_mode": mode,
                                 "proxies_healthy": active - paused if active else 0,

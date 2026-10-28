@@ -51,7 +51,7 @@ http://USER:PASSWORD@proxy.example:10000
 
 The default `"monitor_connection": "direct"` ignores configured proxies and keeps one verified Apple session, renewing it on expiration and attempting one bounded recovery after a session rejection. It does not let an exhausted proxy pool block all ZIPs. HTTP 429 and explicit `Retry-After` still trigger backoff. The dashboard reports active proxies separately from configured proxies.
 
-To opt into the older proxy pool, set `"monitor_connection": "proxy"`. Percent-encode special characters in proxy usernames/passwords. A working proxy is reused for each ZIP; failed routes receive cooldowns. Discord delivery connects directly. Credentials and cookie values stay out of logs, and inherited environment/system proxies are disabled.
+To use the persistent verified proxy pool, set `"monitor_connection": "proxy"`. Percent-encode special characters in proxy usernames/passwords. Each route keeps its own TLS connection and cookie jar; bootstrap, verification and inventory requests all use that same proxy. A working route is reused for each ZIP, and failed routes receive cooldowns with bounded failover. Checkout and Discord delivery still connect directly. Credentials and cookie values stay out of logs, and inherited environment/system proxies are disabled.
 
 ## Polling and duplicate suppression
 
@@ -94,7 +94,7 @@ The companion verifies an empty bag, exact part, all product options, and the se
 
 **Current live-test limitation:** Apple rejected the isolated diagnostic session with **HTTP 541**, including a native Add to Bag click over the direct connection; the bag was confirmed empty afterward. The user's regular browser did reach pickup selection. The beta therefore pauses with **Needs attention**. Pickup selection, populated-bag quantity controls, final tax-inclusive totals, and checkout are **not yet automated or verified**. A `review_ready` state requires every product/store/quantity/AppleCare/currency/tax/total fact to be verified within the limit; the current browser adapter does not invent those facts.
 
-**Current reliability:** a direct-session diagnostic briefly returned complete coverage, but subsequent live checks returned HTTP 541 again. Continuous availability has not been established. Use the coverage and last successful check on the dashboard to judge whether current inventory is known.
+**Connection recovery:** the direct connection repeatedly returned HTTP 541. Persistent verified proxy sessions subsequently recovered all 19 stores and 38 products across repeated live five-second sweeps. This is a verified recovery, not an uptime guarantee; use the coverage and last successful check on the dashboard to judge whether current inventory is known.
 
 **Later API investigation:** an explicitly authorized API test did complete the iPhone 17e pickup/billing/Place Order path and received a real Apple payment decline, followed by a private-channel failure webhook. The reusable API modules and durable guards are experimental; they are not wired into the dashboard's browser beta, and the subsequent iPhone 17 timed test was not completed. Beta development is paused while the stock monitor runs independently. No unattended order submission is enabled by default.
 

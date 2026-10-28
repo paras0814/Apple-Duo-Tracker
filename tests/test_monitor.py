@@ -402,6 +402,72 @@ class NetworkTests(unittest.TestCase):
         state.db.close()
 
 
+class VerifiedProxyTests(unittest.TestCase):
+    class Transport:
+        def __init__(self): self.calls = []; self.closed = False
+        def request(self, method, url, **kwargs): self.calls.append((url, kwargs)); return None
+        def close(self): self.closed = True
+
+    class Verified:
+        def __init__(self, status=200):
+            self._session = VerifiedProxyTests.Transport()
+            self.status = status; self.verifies = 0; self.valid = False
+        def verify_session(self, origin, client_profile):
+            self.verifies += 1; self.valid = True
+            self._session.request('GET', origin + '/bootstrap', proxy='', proxies={}, timeout=20)
+        def verification_cookie_valid(self, origin): return self.valid
+        def request(self, method, url):
+            self._session.request(method, url, proxy='', proxies={}, timeout=20)
+            code = self.status
+            class Response:
+                status = code
+                headers = {}
+                def json(self): return payload('unavailable')
+            return Response()
+        def close(self): self._session.close()
+
+    def setup_client(self, statuses=(200,)):
+        cfg = config(); cfg['seed_zips'] = ['07470']
+        cfg['proxies'] = ['http://user:private-password@proxy.example:' + str(10000+i) for i in range(len(statuses))]
+        clients = []; names = []
+        def factory(root, run):
+            client = self.Verified(statuses[len(clients)]); clients.append(client); names.append(run); return client
+        return cfg, clients, names, m.AppleClient(cfg, verified_factory=factory)
+
+    def test_proxy_is_applied_to_bootstrap_and_inventory_despite_checkout_direct_defaults(self):
+        cfg, clients, names, client = self.setup_client()
+        rows, errors, _ = client.sweep()
+        self.assertEqual((len(rows), errors), (38, []))
+        client.sweep()
+        self.assertEqual(clients[0].verifies, 1)
+        self.assertEqual(len(clients), 1)
+        for _, kwargs in clients[0]._session._session.calls:
+            self.assertEqual(kwargs['proxy'], cfg['proxies'][0])
+            self.assertNotIn('proxies', kwargs)
+            self.assertLessEqual(kwargs['timeout'], cfg['request_timeout_seconds'])
+        self.assertNotIn('private-password', ''.join(names) + json.dumps(client.diagnostics))
+        self.assertEqual(client.diagnostics['connection_mode'], 'verified_proxy')
+        client.close(); self.assertTrue(clients[0]._session.closed)
+
+    def test_rejected_verified_proxy_fails_over_and_reuses_the_good_session(self):
+        cfg, clients, names, client = self.setup_client((541, 200))
+        rows, errors, _ = client.sweep()
+        self.assertEqual((len(rows), errors), (38, []))
+        self.assertEqual(client.diagnostics['proxy_failovers'], 1)
+        self.assertGreater(client.proxy_health[0][1] - time.monotonic(), 299)
+        client.sweep()
+        self.assertEqual([c.verifies for c in clients], [1, 1])
+        self.assertEqual(len(clients), 2)
+        self.assertEqual(len(clients[0]._session._session.calls), 2)
+        self.assertEqual(len(clients[1]._session._session.calls), 3)
+
+    def test_expiration_renews_only_the_selected_proxy_session(self):
+        cfg, clients, names, client = self.setup_client()
+        client.sweep(); clients[0].valid = False; client.sweep()
+        self.assertEqual(clients[0].verifies, 2)
+        self.assertEqual(len(clients), 1)
+
+
 class VerifiedDirectTests(unittest.TestCase):
     class FakeVerified:
         def __init__(self, responses=None):
