@@ -4,9 +4,9 @@ Track Apple iPhone availability across **all 12 New Jersey stores and 7 Manhatta
 
 ## Run on Windows
 
-Double-click **Start.cmd**. It opens the dashboard at **http://127.0.0.1:8765** and keeps the monitor running in the background. On a new checkout it downloads a checksum-verified portable Python runtime from python.org and creates `config.local.json` from the example. No pip packages are required.
+Double-click **Start.cmd**. It opens the dashboard at **http://127.0.0.1:8765** and keeps the monitor running in the background. On a new checkout it downloads a checksum-verified portable Python runtime from python.org and creates `config.local.json` from the example. No system-wide Python packages are required; the Apple transport is installed into the private `.runtime` directory.
 
-Put your Discord webhook and optional HTTP proxies in **config.local.json**, then restart with **Stop.cmd**, followed by **Start.cmd**. Keep the PC awake and connected. Normal Wi-Fi works when Apple accepts direct requests; proxies are optional. Closing the dashboard does not stop monitoring.
+Put your Discord webhook in **config.local.json**, then restart with **Stop.cmd**, followed by **Start.cmd**. Monitoring defaults to a persistent verified direct Apple session on your local connection. Start.cmd installs its checksum-pinned private transport when needed. The Windows monitor prevents idle system sleep while it runs; keep the PC powered and connected. Closing the dashboard or Codex does not stop the independent monitor. It makes no OpenAI requests and consumes no Codex usage allowance.
 
 ```powershell
 .\Start.cmd --no-browser
@@ -49,13 +49,15 @@ Copy `config.example.json` to `config.local.json`. Credentials belong only in th
 http://USER:PASSWORD@proxy.example:10000
 ```
 
-Percent-encode special characters in proxy usernames/passwords. The proxy pool is used for Apple inventory requests; Discord delivery connects directly. Credential-bearing transport errors are not exposed in logs. A working proxy is reused for each ZIP; transport failures pause that route for 30 to 300 seconds. HTTP 403/541 pause that proxy for at least five minutes. A rejected proxy without an explicit `Retry-After` can fail over within the current request budget instead of unnecessarily pausing the ZIP. Up to three routes can be attempted within that budget; HTTP 429 and explicit `Retry-After` responses retain backoff. The dashboard shows how many proxies are ready. If overlapping successful responses still verify every product, failed upstream checks remain visible under connection-recovery details instead of being labeled an inventory outage. The monitor disables inherited system/environment proxies so this local setting is authoritative.
+The default `"monitor_connection": "direct"` ignores configured proxies and keeps one verified Apple session, renewing it on expiration and attempting one bounded recovery after a session rejection. It does not let an exhausted proxy pool block all ZIPs. HTTP 429 and explicit `Retry-After` still trigger backoff. The dashboard reports active proxies separately from configured proxies.
+
+To opt into the older proxy pool, set `"monitor_connection": "proxy"`. Percent-encode special characters in proxy usernames/passwords. A working proxy is reused for each ZIP; failed routes receive cooldowns. Discord delivery connects directly. Credentials and cookie values stay out of logs, and inherited environment/system proxies are disabled.
 
 ## Polling and duplicate suppression
 
 The endpoint is `https://www.apple.com/shop/retail/pickup-message?pl=true&location=ZIP&parts.0=MK1F4LL%2FA&parts.1=MK1E4LL%2FA`. The monitor reads `body.stores[].partsAvailability[part].pickupDisplay` and accepts only catalogued store IDs with the expected NJ/NY state. Three regional ZIPs cover the area, with targeted ZIP fallback for missing stores.
 
-Sweeps start every five seconds under normal conditions and never overlap. Slow requests can extend the interval; Apple errors trigger backoff and `Retry-After` is honored. Direct-connection 403/541 and all 429 responses trigger at least a one-minute cooldown; proxy-specific rejections can use another ready route. Failed, missing, stale, or unverified data is **unknown**, never fabricated stock or a sold-out transition.
+Sweeps start every five seconds under normal conditions and never overlap. Slow requests can extend the interval; Apple errors trigger backoff and `Retry-After` is honored. HTTP 429 responses trigger at least a one-minute cooldown. Direct session rejections get one bounded renewal attempt per sweep, followed by another check on the configured interval; proxy-specific rejections can use another ready route. Persistent HTTP 541 means Apple is refusing the requests: the process can remain running while stock coverage is unavailable. Failed, missing, stale, or unverified data is **unknown**, never fabricated stock or a sold-out transition.
 
 SQLite state in `.data/monitor.sqlite3` suppresses repeated alerts per **store + part** across polls and restarts. Only confirmed unavailable → available transitions rearm a restock alert. Initial available stock also alerts. Pending alerts are retried after definite failures and expire when stock disappears. A send with an ambiguous outcome is marked `uncertain` and is not automatically resent, preventing blind duplicates; the UI exposes that status.
 
@@ -90,6 +92,12 @@ The beta prepares one phone in a **separate Chrome profile**, with a **$2,300 ta
 
 The companion verifies an empty bag, exact part, all product options, and the selected upfront price before one add attempt. It never blindly retries an ambiguous add. A durable run lock prevents concurrent phones or automatic rearming. Browser cookies/payment information stay in Apple's local browser profile under ignored `.data/`; do not put card details in chat or this repository.
 
-**Current live-test limitation:** Apple rejected the diagnostic cart request with **HTTP 541** on both direct and tested proxy routes, and the bag was confirmed empty afterward. The beta therefore pauses with **Needs attention**. Pickup selection, populated-bag quantity controls, final tax-inclusive totals, and checkout are **not yet automated or verified**. A `review_ready` state requires every product/store/quantity/AppleCare/currency/tax/total fact to be verified within the limit; the current browser adapter does not invent those facts.
+**Current live-test limitation:** Apple rejected the isolated diagnostic session with **HTTP 541**, including a native Add to Bag click over the direct connection; the bag was confirmed empty afterward. The user's regular browser did reach pickup selection. The beta therefore pauses with **Needs attention**. Pickup selection, populated-bag quantity controls, final tax-inclusive totals, and checkout are **not yet automated or verified**. A `review_ready` state requires every product/store/quantity/AppleCare/currency/tax/total fact to be verified within the limit; the current browser adapter does not invent those facts.
+
+**Current reliability:** a direct-session diagnostic briefly returned complete coverage, but subsequent live checks returned HTTP 541 again. Continuous availability has not been established. Use the coverage and last successful check on the dashboard to judge whether current inventory is known.
+
+**Later API investigation:** an explicitly authorized API test did complete the iPhone 17e pickup/billing/Place Order path and received a real Apple payment decline, followed by a private-channel failure webhook. The reusable API modules and durable guards are experimental; they are not wired into the dashboard's browser beta, and the subsequent iPhone 17 timed test was not completed. Beta development is paused while the stock monitor runs independently. No unattended order submission is enabled by default.
+
+The browser companion now clicks Apple's native button instead of reconstructing an add request. Checkout uses the local connection with no configured monitoring proxies. A separate [REA investigation of Refract's Apple HTTP workflow](research/REFRACT-APPLE.md) records session bootstrap, cart-route branches and pickup model actions for the API beta; these findings are not a claim of successful automated checkout.
 
 See the [live REA evidence and test results](research/BETA-CHECKOUT-EVIDENCE.md) and [checkout investigation](research/CHECKOUT-AUTOMATION.md).

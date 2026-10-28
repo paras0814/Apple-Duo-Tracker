@@ -96,20 +96,14 @@ async function productState(cdp,plan) {
   })()`);
 }
 
-async function addOnce(cdp,plan) {
-  // This is the observed public helper request. Its page token never leaves Apple.
-  return cdp.evaluate(`(async () => {
-    const part=${JSON.stringify(plan.part)};
-    if(location.origin!=='https://www.apple.com')return {attempted:false,reason:'Wrong origin'};
-    const token=decodeURIComponent((document.cookie.split('; ').find(c=>c.startsWith('as_atb='))||'').slice(7)).split('|')[2];
-    if(!token)return {attempted:false,reason:'Apple session token is not available'};
-    const params=new URLSearchParams({product:part,purchaseOption:'fullPrice',cppart:'UNLOCKED/US',step:'select',acpart:'none',bfil:'2',atbtoken:token,'add-to-cart':'add-to-cart'});
-    const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),12000);
-    try {
-      const response=await fetch(${JSON.stringify('/shop/buy-iphone/'+plan.product.slug)}+'?'+params,{credentials:'include',signal:controller.signal});
-      return {attempted:true,http_status:response.status,confirmed:response.ok&&new URL(response.url).searchParams.get('step')==='attach'};
-    } catch {return {attempted:true,ambiguous:true};} finally {clearTimeout(timer);}
-  })()`,16000);
+export async function addOnce(cdp) {
+  // Submit Apple's actual form through the visible button. Do not reconstruct
+  // requests or read session tokens; native failures still require bag review.
+  try {
+    await cdp.click('button[data-autom="add-to-cart"]');
+    await delay(1200);
+    return {attempted:true};
+  } catch {return {attempted:true,ambiguous:true};}
 }
 
 export async function runBeta(plan) {
@@ -138,10 +132,10 @@ export async function runBeta(plan) {
     if(cents===null)return {status:'blocked',stage:'price',message:'The selected full-price amount could not be verified. No bag addition was attempted.'};
     if(cents>plan.max_total_cents)return {status:'blocked',stage:'price',message:'The phone alone exceeds the $2,300 tax-inclusive limit. No bag addition was attempted.'};
     stage='adding';progress(stage,'Adding one selected phone once. Final tax, pickup store, and checkout still require verification.');
-    const add=await addOnce(cdp,plan);
+    await addOnce(cdp);
     stage='bag_reconciliation';progress(stage,'Inspecting the Apple bag after the single add attempt. No automatic retry will be made.');
     const empty=await bagIsEmpty(cdp);
-    if(empty)return {status:'needs_attention',stage,message:add.http_status?`Apple did not add the phone (HTTP ${add.http_status}); the bag is empty. Inspect the browser before resetting.`:'Apple did not confirm a bag addition; the bag is empty. Inspect the browser before resetting.'};
+    if(empty)return {status:'needs_attention',stage,message:'The native Add to Bag did not add the phone; the bag is empty. This browser uses a direct connection. If your regular browser works, continue there manually instead of repeating this run.'};
     // No populated-bag/pickup/final-total selectors have been observed in this environment.
     // Fail closed here instead of manufacturing review facts or clicking checkout/payment.
     return {status:'needs_attention',stage:'pickup_review',message:`The bag needs manual review. Confirm exactly one ${plan.model}, choose Apple ${plan.store_name} for pickup, verify no AppleCare and the final tax-inclusive total. Automatic pickup and final review are unverified; this beta has not submitted an order.`};

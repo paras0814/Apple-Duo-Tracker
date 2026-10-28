@@ -15,6 +15,7 @@ import monitor as m
 
 def config():
     return {"interval_seconds": 5, "request_timeout_seconds": 1,
+            "monitor_connection": "proxy",  # Legacy pool fixtures opt in explicitly.
             "seed_zips": ["07470", "08837", "08002"], "proxies": [],
             "discord": {"mode": "webhook", "webhook_url": "https://discord.com/api/webhooks/123/local_test_secret"},
             "dashboard_port": 8765}
@@ -399,6 +400,93 @@ class NetworkTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, 404)
                 caught.exception.close()
         state.db.close()
+
+
+class VerifiedDirectTests(unittest.TestCase):
+    class FakeVerified:
+        def __init__(self, responses=None):
+            self.responses=list(responses or []);self.valid=False;self.verifies=0;self.calls=[];self.closed=False
+        def verify_session(self, origin, client_profile):
+            self.verifies+=1;self.valid=True
+        def verification_cookie_valid(self, origin):return self.valid
+        def request(self, method, url, headers=None):
+            self.calls.append((method,url,headers))
+            code,extra=self.responses.pop(0) if self.responses else (200,{})
+            class Response:
+                status=code;headers=extra
+                def json(self):return payload("unavailable")
+            return Response()
+        def close(self):self.closed=True
+
+    def setup_client(self, responses=None):
+        cfg=config();cfg.pop('monitor_connection')
+        cfg['proxies']=[f'http://proxy-{i}.example:10000' for i in range(17)]
+        fake=self.FakeVerified(responses);created=[]
+        def factory(root,run):created.append(run);return fake
+        def forbidden(*args,**kwargs):raise AssertionError('The configured proxy pool must not be used')
+        return cfg,fake,created,m.AppleClient(cfg,forbidden,verified_factory=factory)
+
+    def test_default_direct_ignores_all_configured_proxies_and_reuses_one_session(self):
+        cfg,fake,created,client=self.setup_client()
+        rows,errors,count=client.sweep()
+        self.assertEqual((len(rows),errors,count),(38,[],3))
+        client.sweep()
+        self.assertEqual((fake.verifies,len(created)),(1,1))
+        self.assertEqual(client.diagnostics['proxy_count'],0)
+        self.assertEqual(client.diagnostics['configured_proxy_count'],17)
+        self.assertEqual(client.diagnostics['connection_mode'],'verified_direct')
+        client.close();self.assertTrue(fake.closed)
+
+    def test_one_541_renews_once_and_recovers_without_zip_blackout(self):
+        cfg,fake,created,client=self.setup_client([(541,{}),(200,{})])
+        rows,errors,count=client.sweep()
+        self.assertEqual((len(rows),errors,count),(38,[],4))
+        self.assertEqual(fake.verifies,2)
+        self.assertEqual(client.cooldowns,{})
+
+    def test_repeated_541_is_bounded_to_one_renewal_and_five_second_retry(self):
+        cfg,fake,created,client=self.setup_client([(541,{})]*4)
+        rows,errors,count=client.sweep()
+        self.assertEqual((len(rows),len(errors),count),(0,3,4))
+        self.assertEqual(fake.verifies,2)
+        for _,until in client.cooldowns.values():self.assertLessEqual(until-time.time(),5.1)
+
+    def test_rate_limit_and_explicit_retry_after_do_not_trigger_challenge_retry(self):
+        for code,delay in ((429,120),(541,90)):
+            cfg,fake,created,client=self.setup_client([(code,{'retry-after':str(delay)})])
+            cfg['seed_zips']=['07470']
+            rows,errors,count=client.sweep()
+            self.assertEqual((rows,len(errors),count),({},1,1))
+            self.assertEqual(fake.verifies,1)
+            self.assertGreater(client.cooldowns['07470'][1]-time.time(),delay-1)
+
+    def test_expired_session_is_renewed_in_place(self):
+        cfg,fake,created,client=self.setup_client();client.sweep();fake.valid=False;client.sweep()
+        self.assertEqual((fake.verifies,len(created)),(2,1))
+
+    def test_missing_optional_transport_falls_back_direct_without_credentials_or_boot_crash(self):
+        cfg=config();cfg['monitor_connection']='direct';cfg['proxies']=['http://unused.example:10000'];calls=[]
+        def missing(*args):raise OSError('PRIVATE_SETUP_DETAIL')
+        def direct(url,**kwargs):calls.append(kwargs['proxy']);return payload()
+        client=m.AppleClient(cfg,direct,verified_factory=missing)
+        rows,errors,_=client.sweep()
+        self.assertEqual((len(rows),errors),(38,[]))
+        self.assertTrue(all(proxy is None for proxy in calls))
+        self.assertEqual(client.diagnostics['proxy_count'],0)
+        self.assertEqual(client.diagnostics['connection_mode'],'direct_unverified')
+        self.assertNotIn('PRIVATE',json.dumps(client.diagnostics))
+
+    def test_configuration_and_dashboard_report_selected_route_not_saved_pool(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg=config();cfg.pop('monitor_connection');cfg['proxies']=['http://unused.example:10000']
+            path=Path(tmp)/'config.json';path.write_text(json.dumps(cfg),encoding='utf8')
+            loaded=m.load_config(path);self.assertEqual(loaded['monitor_connection'],'direct')
+            state=m.State(Path(tmp)/'state.sqlite3',loaded)
+            try:
+                status=state.snapshot()['status'];self.assertEqual(status['proxy_count'],0);self.assertEqual(status['configured_proxy_count'],1)
+            finally:state.db.close()
+            cfg['monitor_connection']='invalid';path.write_text(json.dumps(cfg),encoding='utf8')
+            with self.assertRaises(ValueError):m.load_config(path)
 
 
 if __name__ == "__main__":

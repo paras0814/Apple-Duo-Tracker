@@ -31,3 +31,18 @@ test('newline plan input survives reader closure and does not consume a second p
  assert.equal(await readOnePlan(Readable.from(['{"first":true}\n{"second":true}\n']),1000),'{"first":true}');
  await assert.rejects(readOnePlan(Readable.from([]),1000));
 });
+test('native cart submission makes only one attempt when navigation is uncertain',async()=>{
+ const {addOnce}=await import('../beta/browser.mjs');
+ const attempts=[];
+ const result=await addOnce({click:async selector=>{attempts.push(selector);throw Error('connection lost after release');},evaluate:()=>{throw Error('must not reconstruct requests or read cookies');}});
+ assert.deepEqual(attempts,['button[data-autom="add-to-cart"]']);
+ assert.deepEqual(result,{attempted:true,ambiguous:true});
+});
+test('missing or covered native cart button cannot dispatch input',async()=>{
+ const {CDP}=await import('../beta/cdp.mjs');
+ let dispatched=0;
+ const c=Object.create(CDP.prototype);
+ c.evaluate=async()=>null;c.call=async()=>{dispatched++;};
+ await assert.rejects(c.click('button[data-autom="add-to-cart"]'),/missing, disabled, ambiguous or covered/);
+ assert.equal(dispatched,0);
+});

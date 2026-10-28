@@ -51,6 +51,9 @@ def load_config(path):
     if not isinstance(zips, list) or not zips or any(not isinstance(z, str) or not re.fullmatch(r"\d{5}", z) for z in zips):
         raise ValueError("seed_zips must be a nonempty list of five-digit ZIP strings")
     proxies = cfg.get("proxies", [])
+    connection = cfg.get("monitor_connection", "direct")
+    if connection not in ("direct", "proxy"):
+        raise ValueError("monitor_connection must be direct or proxy")
     if not isinstance(proxies, list):
         raise ValueError("proxies must be a list of HTTP proxy URLs")
     for proxy in proxies:
@@ -70,6 +73,7 @@ def load_config(path):
     if not isinstance(port, int) or not 1024 <= port <= 65535:
         raise ValueError("dashboard_port must be an integer between 1024 and 65535")
     return {**cfg, "interval_seconds": interval, "request_timeout_seconds": timeout,
+            "monitor_connection": connection,
             "seed_zips": list(dict.fromkeys(zips)), "proxies": proxies,
             "discord": {"mode": "webhook", "webhook_url": webhook}, "dashboard_port": port}
 
@@ -178,8 +182,9 @@ def parse_pickup(payload, *, parts=None, product_name="iPhone Duo"):
 
 
 class AppleClient:
-    def __init__(self, cfg, fetch=http_json, *, parts=None, product_name="iPhone Duo"):
+    def __init__(self, cfg, fetch=http_json, *, parts=None, product_name="iPhone Duo", verified_factory=None):
         self.cfg, self.fetch = cfg, fetch
+        self.connection = cfg.get("monitor_connection", "direct")
         self.parts = PARTS if parts is None else parts
         self.product_name = product_name
         self.cooldowns = {}
@@ -191,13 +196,99 @@ class AppleClient:
         self.request_count = 0
         self.failover_count = 0
         self.diagnostics = {}
+        self.direct_lock = threading.RLock()
+        self.verified_factory = verified_factory
+        self.verified_client = None
+        self.verified_setup_failed = False
+        self.verified_started = False
+        self.direct_renewals = 0
+        self.direct_recovery_used = False
+
+    def _verified(self):
+        if self.verified_client is not None or self.verified_setup_failed:
+            return self.verified_client
+        # Fixtures with a custom HTTP function remain fully offline unless they
+        # explicitly inject the verified transport too.
+        if self.verified_factory is None and self.fetch is not http_json:
+            return None
+        try:
+            if self.verified_factory is None:
+                from beta.apple_client import AppleClient as VerifiedClient
+                factory = VerifiedClient
+            else:
+                factory = self.verified_factory
+            run = "stock-monitor" if set(self.parts) == set(PARTS) else "stock-monitor-diagnostic"
+            self.verified_client = factory(ROOT, run)
+            # Bound each underlying network operation by the configured monitor
+            # timeout, including bootstrap. The API client defaults to 20s.
+            session = getattr(self.verified_client, "_session", None)
+            if session is not None:
+                budget = self.cfg["request_timeout_seconds"]
+                class BudgetSession:
+                    def __getattr__(self, name): return getattr(session, name)
+                    def request(self, *args, **kwargs):
+                        kwargs["timeout"] = min(float(kwargs.get("timeout", budget)), budget)
+                        return session.request(*args, **kwargs)
+                self.verified_client._session = BudgetSession()
+        except Exception:
+            # Optional transport setup cannot prevent the core monitor starting.
+            # This fallback is still explicitly direct, never the supplied pool.
+            self.verified_setup_failed = True
+            self.verified_client = None
+        return self.verified_client
+
+    def _verify_direct(self, client):
+        try:
+            client.verify_session("https://www.apple.com", client_profile="native_compatible_emulation")
+            self.verified_started = True
+            self.direct_renewals += 1
+        except Exception as exc:
+            status = getattr(exc, "status", None)
+            raise FetchError("Apple direct session verification failed", status_code=status,
+                             retry_after=60 if status == 429 else 0) from None
+
+    def _query_verified_direct(self, zip_code, url):
+        with self.direct_lock:
+            client = self._verified()
+            if client is None:
+                with self.network_lock: self.request_count += 1
+                return self.fetch(url, proxy=None, timeout=self.cfg["request_timeout_seconds"])
+            if not self.verified_started or not client.verification_cookie_valid("https://www.apple.com"):
+                self._verify_direct(client)
+            for attempt in range(2):
+                with self.network_lock: self.request_count += 1
+                try:
+                    response = client.request("GET", url, headers={"Accept":"application/json", "Referer":"https://www.apple.com/shop/buy-iphone/iphone-duo", "Sec-Fetch-Site":"same-origin", "Sec-Fetch-Mode":"cors", "Sec-Fetch-Dest":"empty"})
+                except Exception as exc:
+                    raise FetchError("Apple direct network/TLS/timeout failure", transport=True,
+                                     status_code=getattr(exc, "status", None)) from None
+                delay = retry_delay(response.headers.get("retry-after"))
+                if response.status == 200:
+                    try: return response.json()
+                    except Exception: raise FetchError("Apple returned invalid JSON") from None
+                if response.status == 429:
+                    raise FetchError("Apple HTTP 429", retry_after=max(delay, 60), status_code=429)
+                if (response.status in (403, 541) and not delay and not attempt
+                        and not self.direct_recovery_used):
+                    self.direct_recovery_used = True
+                    self._verify_direct(client)
+                    continue
+                raise FetchError(f"Apple HTTP {response.status}", retry_after=delay, status_code=response.status)
+
+    def close(self):
+        if self.verified_client is not None:
+            self.verified_client.close()
 
     def _query(self, zip_code, proxy, timeout=None):
         params = {"pl": "true", "location": zip_code,
                   **{f"parts.{i}": part for i, part in enumerate(self.parts)}}
+        url = APPLE_URL + "?" + parse.urlencode(params)
+        if self.connection == "direct":
+            payload = self._query_verified_direct(zip_code, url)
+            return parse_pickup(payload, parts=self.parts, product_name=self.product_name)
         with self.network_lock:
             self.request_count += 1
-        payload = self.fetch(APPLE_URL + "?" + parse.urlencode(params), proxy=proxy,
+        payload = self.fetch(url, proxy=proxy,
                              timeout=timeout or self.cfg["request_timeout_seconds"])
         return parse_pickup(payload, parts=self.parts, product_name=self.product_name)
 
@@ -217,7 +308,7 @@ class AppleClient:
             raise FetchError("Configured HTTP proxies are cooling down", retry_after=min(remaining, default=5))
 
     def _query_with_failover(self, zip_code):
-        if not self.cfg["proxies"]:
+        if self.connection == "direct" or not self.cfg["proxies"]:
             return self._query(zip_code, None)
         deadline = time.monotonic() + self.cfg["request_timeout_seconds"]
         excluded = set()
@@ -284,7 +375,8 @@ class AppleClient:
                             rows[key] = value
                 except Exception as exc:
                     failures = self.cooldowns.get(zip_code, (0, 0))[0] + 1
-                    delay = max(min(300, 5 * 2 ** min(failures - 1, 6)), getattr(exc, "retry_after", 0))
+                    local_delay = self.cfg["interval_seconds"] if self.connection == "direct" else min(300, 5 * 2 ** min(failures - 1, 6))
+                    delay = max(local_delay, getattr(exc, "retry_after", 0))
                     self.cooldowns[zip_code] = (failures, time.time() + delay)
                     message = str(exc) if isinstance(exc, FetchError) else "Invalid Apple response"
                     self.last_errors[zip_code] = message
@@ -292,6 +384,7 @@ class AppleClient:
         return rows, errors, self.request_count - before
 
     def sweep(self):
+        self.direct_recovery_used = False
         previous_failovers = self.failover_count
         rows, errors, requests = self._batch(self.cfg["seed_zips"])
         # Regional ZIPs cover NJ and NYC. Query any missing store's own ZIP
@@ -308,10 +401,15 @@ class AppleClient:
             requests += count
         with self.network_lock:
             paused = sum(until > time.monotonic() for _, until in self.proxy_health.values())
-            self.diagnostics = {"proxy_count": len(self.cfg["proxies"]),
-                                "proxies_healthy": len(self.cfg["proxies"]) - paused,
-                                "proxies_cooling_down": paused,
-                                "proxy_failovers": self.failover_count - previous_failovers}
+            active = len(self.cfg["proxies"]) if self.connection == "proxy" else 0
+            mode = "proxy" if self.connection == "proxy" else "verified_direct" if self.verified_client is not None else "direct_unverified"
+            self.diagnostics = {"proxy_count": active, "configured_proxy_count": len(self.cfg["proxies"]),
+                                "monitor_connection": self.connection, "connection_mode": mode,
+                                "proxies_healthy": active - paused if active else 0,
+                                "proxies_cooling_down": paused if active else 0,
+                                "proxy_failovers": self.failover_count - previous_failovers,
+                                "direct_session_renewals": self.direct_renewals,
+                                "transport_warning": "Run Setup-API.cmd for verified direct monitoring." if self.verified_setup_failed else None}
         return rows, errors, requests
 
 
@@ -396,7 +494,9 @@ class State:
                     "status": {**self.status, "stores_seen": len({r["store_id"] for r in rows if r["status"] != "unknown"}),
                                "products_verified": sum(r["verified"] for r in rows),
                                "stores_expected": len(STORES), "products_expected": len(STORES) * len(PARTS),
-                               "interval_seconds": self.cfg["interval_seconds"], "proxy_count": len(self.cfg["proxies"]),
+                               "interval_seconds": self.cfg["interval_seconds"], "proxy_count": len(self.cfg["proxies"]) if self.cfg.get("monitor_connection", "direct") == "proxy" else 0,
+                               "configured_proxy_count": len(self.cfg["proxies"]),
+                               "monitor_connection": self.cfg.get("monitor_connection", "direct"),
                                "discord_configured": bool(self.cfg["discord"]["webhook_url"]),
                                "discord_mode": "private-channel webhook", "server_time": iso()}}
 
@@ -631,6 +731,16 @@ def main():
     except OSError:
         parser.exit(1, "Dashboard port is already in use. The monitor may already be running.\n")
     (data_dir / "monitor.pid").write_text(str(__import__("os").getpid()))
+    # Keep this monitor's Windows thread awake while running. The display may
+    # turn off normally; stopping the process releases this nonpersistent lease.
+    awake = False
+    if __import__("os").name == "nt":
+        try:
+            import ctypes
+            awake = bool(ctypes.windll.kernel32.SetThreadExecutionState(0x80000001))
+        except (AttributeError, OSError):
+            pass
+    state.status["sleep_inhibited"] = awake
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
     workers = [threading.Thread(target=fn, args=(state, stop), daemon=True) for fn in (poll_loop, alert_loop, beta_loop)]
@@ -644,6 +754,8 @@ def main():
         server.server_close()
         for worker in workers:
             worker.join(timeout=12)
+        if awake:
+            ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
         (data_dir / "monitor.pid").unlink(missing_ok=True)
 
 

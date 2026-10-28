@@ -62,5 +62,20 @@ export class CDP {
     const destination=new URL(url);
     await this.waitFor(`document.readyState === 'complete' && location.origin === ${JSON.stringify(destination.origin)} && location.pathname === ${JSON.stringify(destination.pathname)}`,20000);
   }
+  async click(selector) {
+    const point=await this.evaluate(`(() => {
+      const matches=[...document.querySelectorAll(${JSON.stringify(selector)})].filter(e=>e.getClientRects().length&&!e.disabled);
+      if(matches.length!==1)return null;
+      const e=matches[0];e.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
+      const r=e.getBoundingClientRect();const x=r.left+r.width/2,y=r.top+r.height/2;
+      const hit=document.elementFromPoint(x,y);
+      return hit&&(hit===e||e.contains(hit))?{x,y}:null;
+    })()`);
+    if(!point || !Number.isFinite(point.x) || !Number.isFinite(point.y))throw new Error('The Apple button is missing, disabled, ambiguous or covered');
+    await this.call('Input.dispatchMouseEvent',{type:'mouseMoved',...point});
+    await this.call('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...point});
+    // A release may navigate. Never retry it after an uncertain response.
+    await this.call('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...point});
+  }
   close() {this.ws.close();}
 }

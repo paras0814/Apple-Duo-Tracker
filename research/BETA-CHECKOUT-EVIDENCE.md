@@ -34,7 +34,11 @@ Its selected upfront price was **$699.00**, corroborated by product JSON `partNu
 1. A real native Add to Bag click submitted to the variant path and reached Apple's **page-not-found** screen. The bag was then inspected in the same isolated session: **“Your bag is empty.”**
 2. After that reconciliation, a single same-origin request using the reference helper's **base product path** and the observed page token returned **HTTP 541**, without a confirmed `step=attach` destination. This action used the diagnostic native-CDP script; it was not a REA-declared action. A subsequent REA bag capture again confirmed an empty bag. There was no blind retry.
 
-The cause of HTTP 541 is unresolved. A proxy or visible-browser route may behave differently, but success has not been established and connection rotation is not implemented within a run.
+Follow-up: the user supplied a screenshot from their regular browser showing **iPhone 17e 256GB Black** at Apple's secure checkout fulfillment page, with pickup options and a displayed order summary of **$761.04**. This is user-supplied evidence of that browser reaching pickup, not a completed order or independently verified final charge.
+
+A new direct-connection test used the generic product page, selected all six native controls, verified the exact part and $699 price, and dispatched a real pointer click on Apple's enabled Add to Bag button. The document request returned **HTTP 541**, displayed Page Not Found, and the same browser's bag was subsequently confirmed empty. That establishes that the isolated session also fails with native form submission; it does not establish why Apple rejects it. No new proxies were used. Raw sanitized test results stay local in `.runtime/native-local-result.json`.
+
+The browser adapter now uses the native button rather than reconstructing the helper's request or reading Apple's session token. A missing/covered/ambiguous button cannot dispatch input, and an uncertain click is never retried. Checkout remains fixed to the direct connection.
 
 ## What is genuinely unknown
 

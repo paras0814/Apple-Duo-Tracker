@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 import queue
 import subprocess
 import threading
 import time
 import uuid
+
+from beta.alerts import checkout_failure_payload, normalize_failure, safe_text
 
 MAX_TOTAL_CENTS = 230_000
 TEST_PART = "MHRN4LL/A"
@@ -16,6 +19,67 @@ TEST_PRODUCT = {
     "buy_url": "https://www.apple.com/shop/buy-iphone/iphone-17e/6.1-inch-display-256gb-black-unlocked",
 }
 ACTIVE = {"armed", "checking_stock", "checking_stock_running", "queued", "preparing", "needs_attention", "review_ready"}
+MUTATIONS = {"add_to_cart", "checkout_entry", "guest_login", "select_pickup", "select_store", "select_slot", "pickup_contact", "billing", "payment_validation"}
+
+
+def _mutation_key(value):
+    # One billing-card intent regardless of the caller-facing label.
+    return {"billing_card": "payment_validation", "submit_order": "place_order"}.get(value, value) if isinstance(value, str) else ""
+
+
+def _verified_review(target, review):
+    if not isinstance(review, dict) or not isinstance(target, dict):
+        return None
+    if not (review.get("part") == target.get("part") and review.get("store_id") == target.get("store_id")
+            and type(review.get("quantity")) is int and review["quantity"] == 1
+            and review.get("applecare") is False and review.get("currency") == "USD"
+            and review.get("tax_included") is True and type(review.get("total_cents")) is int
+            and 0 < review["total_cents"] <= MAX_TOTAL_CENTS):
+        return None
+    return {key: review[key] for key in ("part", "store_id", "quantity", "applecare", "currency", "tax_included", "total_cents")}
+
+
+def _phase(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", value):
+        raise BetaError("Invalid API checkpoint phase.")
+    return value
+
+
+def _safe_facts(facts):
+    """Checkpoint only model facts; cookies, contact and payment data stay elsewhere."""
+    if not isinstance(facts, dict):
+        return {}
+    result = {}
+    for key in ("quantity", "bag_count", "total_cents", "phone_price_cents", "base_price_cents", "http_status"):
+        value = facts.get(key)
+        if type(value) is int and 0 <= value <= (230_000 if key.endswith("cents") else 999):
+            result[key] = value
+    for key in ("applecare", "tax_included", "confirmed_empty", "pickup_confirmed", "session_ready", "store_confirmed", "slot_confirmed", "apple_response_confirmed"):
+        if type(facts.get(key)) is bool:
+            result[key] = facts[key]
+    for key, pattern in (("part", r"M[A-Z0-9]{4}LL/A"), ("store_id", r"R\d{3}"), ("currency", r"USD")):
+        value = facts.get(key)
+        if isinstance(value, str) and re.fullmatch(pattern, value):
+            result[key] = value
+    host = facts.get("checkout_host")
+    if isinstance(host, str) and re.fullmatch(r"(?:www\.apple\.com|secure\d*\.store\.apple\.com)", host):
+        result["checkout_host"] = host
+    path = facts.get("checkout_path")
+    if isinstance(path, str) and re.fullmatch(r"/shop/(?:bag|signIn|checkout(?:/start)?)", path):
+        result["checkout_path"] = path
+    if facts.get("order_result") in ("accepted", "declined", "rejected", "unknown"):
+        result["order_result"] = facts["order_result"]
+    return result
+
+
+def _order_outcome(outcome, facts):
+    if facts.get("apple_response_confirmed") is not True:
+        return "unknown"
+    if outcome == "confirmed" and facts.get("order_result") == "accepted":
+        return "confirmed"
+    if outcome == "rejected" and facts.get("order_result") in ("declined", "rejected"):
+        return "rejected"
+    return "unknown"
 
 
 class BetaError(ValueError):
@@ -33,6 +97,32 @@ class CheckoutBeta:
                 preferred_store TEXT, preferred_part TEXT, target_json TEXT,
                 stage TEXT, message TEXT, created_at REAL, updated_at REAL,
                 cancel_requested INTEGER DEFAULT 0, review_json TEXT)""")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS beta_api_checkpoints (
+                run_id TEXT PRIMARY KEY, phase TEXT NOT NULL, facts_json TEXT NOT NULL,
+                updated_at REAL NOT NULL)""")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS beta_api_mutations (
+                run_id TEXT NOT NULL, mutation_key TEXT NOT NULL, phase TEXT NOT NULL,
+                status TEXT NOT NULL, claim_token TEXT NOT NULL, facts_json TEXT NOT NULL,
+                claimed_at REAL NOT NULL, updated_at REAL NOT NULL,
+                PRIMARY KEY (run_id, mutation_key))""")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS beta_failure_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, event_key TEXT NOT NULL,
+                event_json TEXT NOT NULL, payload_json TEXT NOT NULL,
+                delivery TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt REAL NOT NULL DEFAULT 0, claim_token TEXT,
+                created_at REAL NOT NULL, updated_at REAL NOT NULL, message_id TEXT,
+                UNIQUE (run_id, event_key))""")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS beta_order_authorizations (
+                run_id TEXT PRIMARY KEY, review_json TEXT NOT NULL, authorized_at REAL NOT NULL,
+                invalidated_at REAL, claimed_at REAL, claim_token TEXT)""")
+            # An unspent authorization is not a promise that a restarted session's
+            # current review is still the same. It must never auto-submit.
+            self.db.execute("UPDATE beta_runs SET status='needs_attention',message='Order preparation restarted. Reconcile the current Apple review before proceeding.',updated_at=? WHERE run_id IN (SELECT run_id FROM beta_order_authorizations WHERE claimed_at IS NULL AND invalidated_at IS NULL)", (time.time(),))
+            self.db.execute("UPDATE beta_order_authorizations SET invalidated_at=? WHERE claimed_at IS NULL AND invalidated_at IS NULL", (time.time(),))
+            # An intent persisted before HTTP is never replayed after a lost worker.
+            self.db.execute("UPDATE beta_api_mutations SET status='unknown',updated_at=? WHERE status='claimed'", (time.time(),))
+            # A delivered webhook may have lost its acknowledgement. Never blind-resend.
+            self.db.execute("UPDATE beta_failure_alerts SET delivery='uncertain',updated_at=? WHERE delivery='sending'", (time.time(),))
             self.db.execute("UPDATE beta_runs SET status='cancelled',message='Monitor restarted. Arm the beta again when ready.',updated_at=? WHERE status IN ('armed','checking_stock','checking_stock_running')", (time.time(),))
             self.db.execute("UPDATE beta_runs SET status='needs_attention',message='Monitor restarted during preparation. Inspect the beta bag before resetting.',updated_at=? WHERE status IN ('queued','preparing')", (time.time(),))
 
@@ -45,6 +135,8 @@ class CheckoutBeta:
             result = {"status": "disarmed", "message": "Arm the beta when you want one phone prepared for review.",
                       "mode": "review_only", "max_total_cents": MAX_TOTAL_CENTS,
                       "quantity": 1, "applecare": False, "payment_submission": False,
+                      "order_submission_authorized": False, "order_submission_attempted": False,
+                      "pickup_slot_strategy": "earliest",
                       "test_product": TEST_PRODUCT, "can_arm": True}
             if current:
                 target = json.loads(current["target_json"]) if current["target_json"] else None
@@ -53,6 +145,15 @@ class CheckoutBeta:
                               stage=current["stage"], message=current["message"], target=target, review=review,
                               updated_at=current["updated_at"], can_arm=current["status"] not in ACTIVE and self.worker_run is None)
             result["worker_active"] = self.worker_run is not None
+            if current:
+                result["api"] = self.resume_info(current["run_id"])
+                failures = self.db.execute("SELECT delivery,COUNT(*) AS count FROM beta_failure_alerts WHERE run_id=? GROUP BY delivery", (current["run_id"],)).fetchall()
+                result["failure_alerts"] = {r["delivery"]: r["count"] for r in failures}
+                grant = self.db.execute("SELECT invalidated_at,claimed_at FROM beta_order_authorizations WHERE run_id=?", (current["run_id"],)).fetchone()
+                if grant:
+                    result["order_submission_authorized"] = grant["invalidated_at"] is None and grant["claimed_at"] is None and not current["cancel_requested"]
+                    result["order_submission_attempted"] = grant["claimed_at"] is not None
+                    result["payment_submission"] = result["order_submission_authorized"] or result["order_submission_attempted"]
             return result
 
     def arm(self, *, is_test=False, store_id=None, part=None):
@@ -77,7 +178,7 @@ class CheckoutBeta:
         product = TEST_PRODUCT if is_test else {"part": part, "model": "iPhone Duo", **self.parts[part], "buy_url": self.buy_url(part)}
         return {**product, "store_id": sid, "store_name": store["name"], "store_zip": store["zip"],
                 "max_total_cents": MAX_TOTAL_CENTS, "quantity": 1, "applecare": False,
-                "mode": "review_only", "is_test": is_test}
+                "mode": "review_only", "is_test": is_test, "pickup_slot_strategy": "earliest"}
 
     def consider(self, observations):
         """Only current, verified Apple observations can claim a live run."""
@@ -132,9 +233,197 @@ class CheckoutBeta:
             return not row or bool(row[0])
 
     def progress(self, run_id, stage, message):
+        try:
+            stage = _phase(stage)
+        except BetaError:
+            stage = "unknown"
         with self.lock, self.db:
             self.db.execute("UPDATE beta_runs SET stage=?,message=?,updated_at=? WHERE run_id=? AND status='preparing' AND cancel_requested=0",
-                            (str(stage)[:80], str(message)[:500], time.time(), run_id))
+                            (stage, safe_text(message, 500), time.time(), run_id))
+
+    def checkpoint(self, run_id, phase, facts=None):
+        phase, facts = _phase(phase), _safe_facts(facts)
+        with self.lock, self.db:
+            row = self.db.execute("SELECT status,cancel_requested FROM beta_runs WHERE run_id=?", (run_id,)).fetchone()
+            if not row or row["status"] != "preparing" or row["cancel_requested"]:
+                raise BetaError("This beta run cannot advance an API checkpoint.")
+            grant = self.db.execute("SELECT review_json FROM beta_order_authorizations WHERE run_id=? AND claimed_at IS NULL AND invalidated_at IS NULL", (run_id,)).fetchone()
+            if grant and any(key in facts and facts[key] != value for key, value in json.loads(grant["review_json"]).items()):
+                self.db.execute("UPDATE beta_order_authorizations SET invalidated_at=? WHERE run_id=?", (time.time(), run_id))
+            self.db.execute("INSERT OR REPLACE INTO beta_api_checkpoints VALUES (?,?,?,?)", (run_id, phase, json.dumps(facts), time.time()))
+        return self.resume_info(run_id)
+
+    def authorize_order_once(self, run_id, reviewproof):
+        """Record an explicit one-run instruction against the verified review.
+
+        This method is not exposed as an automatic stock or public HTTP action.
+        The caller must have the user's explicit instruction to submit this run.
+        """
+        with self.lock, self.db:
+            current = self._current()
+            if (not current or current["run_id"] != run_id or current["cancel_requested"]
+                    or current["status"] not in ("preparing", "review_ready")):
+                raise BetaError("This run has no current verified order review.")
+            target = json.loads(current["target_json"] or "{}")
+            proof = _verified_review(target, reviewproof)
+            if proof is None:
+                raise BetaError("Order authorization requires the exact one-phone, no-AppleCare, tax-inclusive review within $2,300.")
+            saved = json.loads(current["review_json"] or "{}")
+            if current["status"] == "preparing":
+                checkpoint = self.db.execute("SELECT phase,facts_json FROM beta_api_checkpoints WHERE run_id=?", (run_id,)).fetchone()
+                saved = json.loads(checkpoint["facts_json"]) if checkpoint and checkpoint["phase"] == "review_ready" else {}
+            if _verified_review(target, saved) != proof:
+                raise BetaError("Persist the matching verified review before authorizing its order.")
+            if self.resume_info(run_id)["requires_reconciliation"]:
+                raise BetaError("An earlier request still has an unknown outcome; reconcile it before authorizing an order.")
+            existing = self.db.execute("SELECT * FROM beta_order_authorizations WHERE run_id=?", (run_id,)).fetchone()
+            encoded = json.dumps(proof, sort_keys=True)
+            if existing:
+                if existing["claimed_at"] is not None or existing["invalidated_at"] is not None or existing["review_json"] != encoded:
+                    raise BetaError("This run's one-order authorization was consumed, invalidated or bound to a different review.")
+            else:
+                self.db.execute("INSERT INTO beta_order_authorizations (run_id,review_json,authorized_at) VALUES (?,?,?)", (run_id, encoded, time.time()))
+            self.db.execute("UPDATE beta_runs SET review_json=?,updated_at=? WHERE run_id=?", (encoded, time.time(), run_id))
+        return self.snapshot()
+
+    def claim_mutation(self, run_id, key, phase):
+        """Persist intent before HTTP. Every mutation key is at most once per run."""
+        key = _mutation_key(key)
+        if key not in MUTATIONS and key != "place_order":
+            raise BetaError("This beta mutation is not permitted.")
+        phase = _phase(phase)
+        with self.lock, self.db:
+            current = self._current()
+            grant = self.db.execute("SELECT * FROM beta_order_authorizations WHERE run_id=?", (run_id,)).fetchone()
+            if key == "place_order":
+                if (not current or current["run_id"] != run_id or current["cancel_requested"]
+                        or current["status"] not in ("preparing", "review_ready")
+                        or self.worker_run not in (None, run_id) or not grant
+                        or grant["invalidated_at"] is not None or grant["claimed_at"] is not None):
+                    raise BetaError("This run has no remaining one-order authorization.")
+                proof = _verified_review(json.loads(current["target_json"] or "{}"), json.loads(current["review_json"] or "{}"))
+                if proof is None or json.dumps(proof, sort_keys=True) != grant["review_json"]:
+                    raise BetaError("The reviewed order changed after authorization.")
+            elif grant and grant["claimed_at"] is not None:
+                raise BetaError("An order was already attempted for this run; no further mutations are allowed.")
+            elif (not current or current["run_id"] != run_id or current["status"] != "preparing"
+                    or current["cancel_requested"] or self.worker_run != run_id):
+                raise BetaError("This beta run has no active API worker.")
+            if self.db.execute("SELECT 1 FROM beta_api_mutations WHERE run_id=? AND mutation_key=?", (run_id, key)).fetchone():
+                raise BetaError("This API mutation was already attempted. Reconcile its result instead of retrying.")
+            token, now = uuid.uuid4().hex, time.time()
+            self.db.execute("INSERT INTO beta_api_mutations VALUES (?,?,?,?,?,?,?,?)", (run_id, key, phase, "claimed", token, "{}", now, now))
+            if key == "place_order":
+                self.db.execute("UPDATE beta_order_authorizations SET claimed_at=?,claim_token=? WHERE run_id=?", (now, token, run_id))
+                self.db.execute("UPDATE beta_runs SET status='preparing',stage=?,updated_at=? WHERE run_id=?", (phase, now, run_id))
+                self.worker_run = run_id
+            elif grant and grant["invalidated_at"] is None:
+                self.db.execute("UPDATE beta_order_authorizations SET invalidated_at=? WHERE run_id=?", (now, run_id))
+            return token
+
+    def complete_mutation(self, run_id, key, token, outcome, facts=None):
+        key = _mutation_key(key)
+        if outcome not in ("confirmed", "rejected", "unknown"):
+            raise BetaError("Unknown API mutation outcome.")
+        facts = _safe_facts(facts)
+        with self.lock, self.db:
+            row = self.db.execute("SELECT * FROM beta_api_mutations WHERE run_id=? AND mutation_key=?", (run_id, key)).fetchone()
+            if not row or row["status"] != "claimed" or row["claim_token"] != token:
+                return False
+            if key == "add_to_cart" and outcome == "rejected" and not (facts.get("confirmed_empty") is True and facts.get("bag_count") == 0):
+                outcome = "unknown"
+            if key == "add_to_cart" and outcome == "confirmed":
+                run = self.db.execute("SELECT target_json FROM beta_runs WHERE run_id=?", (run_id,)).fetchone()
+                target = json.loads(run["target_json"] or "{}") if run else {}
+                if not (facts.get("part") == target.get("part") and facts.get("quantity") == 1
+                        and facts.get("bag_count") == 1 and facts.get("applecare") is False):
+                    outcome = "unknown"
+            if key == "place_order":
+                outcome = _order_outcome(outcome, facts)
+            self.db.execute("UPDATE beta_api_mutations SET status=?,facts_json=?,updated_at=? WHERE run_id=? AND mutation_key=?", (outcome, json.dumps(facts), time.time(), run_id, key))
+            return True
+
+    def reconcile_mutation(self, run_id, key, outcome, facts):
+        """Resolve an unknown outcome from a fresh model, never from elapsed time."""
+        key = _mutation_key(key)
+        if outcome not in ("confirmed", "rejected"):
+            raise BetaError("Reconciliation needs a confirmed or rejected result.")
+        facts = _safe_facts(facts)
+        with self.lock, self.db:
+            run = self.db.execute("SELECT * FROM beta_runs WHERE run_id=?", (run_id,)).fetchone()
+            intent = self.db.execute("SELECT * FROM beta_api_mutations WHERE run_id=? AND mutation_key=?", (run_id, key)).fetchone()
+            if not run or not intent or intent["status"] != "unknown" or self.worker_run is not None:
+                raise BetaError("This mutation is not awaiting stopped-worker reconciliation.")
+            if key == "add_to_cart":
+                target = json.loads(run["target_json"] or "{}")
+                valid = (facts.get("confirmed_empty") is True and facts.get("bag_count") == 0) if outcome == "rejected" else (
+                    facts.get("part") == target.get("part") and facts.get("quantity") == 1
+                    and facts.get("bag_count") == 1 and facts.get("applecare") is False)
+                if not valid:
+                    raise BetaError("The fresh cart model did not prove the requested reconciliation.")
+            if key == "place_order" and _order_outcome(outcome, facts) != outcome:
+                raise BetaError("A fresh Apple order result is required to reconcile the order attempt.")
+            self.db.execute("UPDATE beta_api_mutations SET status=?,facts_json=?,updated_at=? WHERE run_id=? AND mutation_key=?", (outcome, json.dumps(facts), time.time(), run_id, key))
+        return self.resume_info(run_id)
+
+    def resume_info(self, run_id):
+        with self.lock:
+            point = self.db.execute("SELECT phase,facts_json,updated_at FROM beta_api_checkpoints WHERE run_id=?", (run_id,)).fetchone()
+            intents = self.db.execute("SELECT mutation_key,phase,status,updated_at FROM beta_api_mutations WHERE run_id=? ORDER BY claimed_at", (run_id,)).fetchall()
+            return {"phase": point["phase"] if point else None,
+                    "facts": json.loads(point["facts_json"]) if point else {},
+                    "mutations": [dict(r) for r in intents],
+                    "requires_reconciliation": any(r["status"] in ("claimed", "unknown") for r in intents)}
+
+    def resume(self, run_id, *, reconciled=False):
+        if reconciled is not True:
+            raise BetaError("Inspect the current Apple state before resuming this run.")
+        with self.lock, self.db:
+            current = self._current()
+            if (not current or current["run_id"] != run_id or current["status"] != "needs_attention"
+                    or not current["target_json"] or self.worker_run is not None):
+                raise BetaError("This beta run cannot be resumed.")
+            if self.resume_info(run_id)["requires_reconciliation"]:
+                raise BetaError("An API mutation still has an unknown outcome.")
+            self.db.execute("UPDATE beta_runs SET status='queued',cancel_requested=0,message='Resuming the existing API session after reconciliation.',updated_at=? WHERE run_id=?", (time.time(), run_id))
+        return self.snapshot()
+
+    def record_failure(self, run_id, event):
+        event = normalize_failure(event)
+        with self.lock, self.db:
+            run = self.db.execute("SELECT target_json FROM beta_runs WHERE run_id=?", (run_id,)).fetchone()
+            if not run or not run["target_json"]:
+                raise BetaError("A failure alert needs an existing selected beta target.")
+            target = json.loads(run["target_json"])
+            payload = checkout_failure_payload(event, target, self.stores.get(target.get("store_id"), {}))
+            now = time.time()
+            self.db.execute("INSERT OR IGNORE INTO beta_failure_alerts (run_id,event_key,event_json,payload_json,created_at,updated_at) VALUES (?,?,?,?,?,?)", (run_id, event["event_key"], json.dumps(event), json.dumps(payload), now, now))
+            row = self.db.execute("SELECT id,delivery FROM beta_failure_alerts WHERE run_id=? AND event_key=?", (run_id, event["event_key"])).fetchone()
+            return dict(row)
+
+    def claim_failure_alert(self):
+        with self.lock, self.db:
+            row = self.db.execute("SELECT * FROM beta_failure_alerts WHERE delivery='pending' AND next_attempt<=? ORDER BY id LIMIT 1", (time.time(),)).fetchone()
+            if not row:
+                return None
+            token = uuid.uuid4().hex
+            self.db.execute("UPDATE beta_failure_alerts SET delivery='sending',attempts=attempts+1,claim_token=?,updated_at=? WHERE id=? AND delivery='pending'", (token, time.time(), row["id"]))
+            return {**dict(row), "delivery": "sending", "claim_token": token, "attempts": row["attempts"] + 1, "payload": json.loads(row["payload_json"])}
+
+    def complete_failure_alert(self, event, *, message_id=None, failure=None):
+        with self.lock, self.db:
+            row = self.db.execute("SELECT * FROM beta_failure_alerts WHERE id=?", (event.get("id"),)).fetchone()
+            if not row or row["delivery"] != "sending" or row["claim_token"] != event.get("claim_token"):
+                return False
+            if failure is None and message_id:
+                delivery, delay = "delivered", 0
+            elif failure is None or getattr(failure, "ambiguous", False):
+                delivery, delay = "uncertain", 0
+            else:
+                delivery = "pending"
+                delay = max(float(getattr(failure, "retry_after", 0)), min(300, 5 * 2 ** min(row["attempts"], 6)))
+            self.db.execute("UPDATE beta_failure_alerts SET delivery=?,next_attempt=?,updated_at=?,message_id=? WHERE id=?", (delivery, time.time() + delay, time.time(), str(message_id)[:100] if message_id else None, row["id"]))
+            return True
 
     def finish(self, run_id, result):
         status = result.get("status")
@@ -144,7 +433,7 @@ class CheckoutBeta:
             if self.worker_run == run_id:
                 self.worker_run = None
             row = self.db.execute("SELECT * FROM beta_runs WHERE run_id=?", (run_id,)).fetchone()
-            if not row or row["cancel_requested"]:
+            if not row or row["cancel_requested"] or row["status"] not in ("preparing", "checking_stock_running"):
                 return
             review = result.get("review") or {}
             target = json.loads(row["target_json"] or "{}")
@@ -157,13 +446,25 @@ class CheckoutBeta:
                     status = "needs_attention"
                     result = {**result, "message": "Final review was incomplete or outside the beta limits. Review the Apple page manually."}
             # Only retain allowlisted review facts, never page text, tokens or contact data.
-            allowed = {key: review[key] for key in ("part", "store_id", "quantity", "applecare", "currency", "tax_included", "total_cents") if key in review}
+            safe_review = _safe_facts(review)
+            allowed = {key: safe_review[key] for key in ("part", "store_id", "quantity", "applecare", "currency", "tax_included", "total_cents") if key in safe_review}
+            may_have_cart = self.db.execute("SELECT 1 FROM beta_api_mutations WHERE run_id=? AND ((mutation_key='add_to_cart' AND status IN ('claimed','confirmed','unknown')) OR mutation_key='place_order')", (run_id,)).fetchone()
+            if status == "blocked" and may_have_cart:
+                status = "needs_attention"
+            try:
+                stage = _phase(result.get("stage", "review"))
+            except BetaError:
+                stage = "unknown"
             self.db.execute("UPDATE beta_runs SET status=?,stage=?,message=?,review_json=?,updated_at=? WHERE run_id=?",
-                            (status, str(result.get("stage", "review"))[:80], str(result.get("message", "Review the beta browser."))[:500], json.dumps(allowed), time.time(), run_id))
+                            (status, stage, safe_text(result.get("message", "Review the beta session."), 500), json.dumps(allowed), time.time(), run_id))
+        if isinstance(result.get("failure"), dict):
+            self.record_failure(run_id, result["failure"])
 
     def stop(self):
         with self.lock, self.db:
             current = self._current()
+            if current:
+                self.db.execute("UPDATE beta_order_authorizations SET invalidated_at=? WHERE run_id=? AND claimed_at IS NULL AND invalidated_at IS NULL", (time.time(), current["run_id"]))
             if current and current["status"] in ACTIVE:
                 started = current["status"] in ("preparing", "needs_attention", "review_ready")
                 self.db.execute("UPDATE beta_runs SET status=?,cancel_requested=1,message=?,updated_at=? WHERE run_id=?",
@@ -177,7 +478,10 @@ class CheckoutBeta:
             current = self._current()
             if self.worker_run is not None or (current and current["status"] in ("preparing", "checking_stock_running", "queued")):
                 raise BetaError("Stop the running beta before resetting.")
+            if current and self.db.execute("SELECT 1 FROM beta_api_mutations WHERE run_id=? AND mutation_key='place_order' AND status IN ('claimed','unknown')", (current["run_id"],)).fetchone():
+                raise BetaError("The order outcome is unknown. Verify Apple's order status before resetting, even if the bag is empty.")
             if current:
+                self.db.execute("UPDATE beta_order_authorizations SET invalidated_at=? WHERE run_id=? AND claimed_at IS NULL AND invalidated_at IS NULL", (time.time(), current["run_id"]))
                 self.db.execute("UPDATE beta_runs SET status='cancelled',cancel_requested=1,message='Beta reset. Arm again when ready.',updated_at=? WHERE run_id=?", (time.time(), current["run_id"]))
         return self.snapshot()
 
