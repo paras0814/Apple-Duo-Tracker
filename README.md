@@ -82,22 +82,14 @@ Downloaded reference scripts, full generated evidence, screenshots, local setup 
 
 ## Checkout beta
 
-The beta prepares one phone in a **separate Chrome profile**, with a **$2,300 tax-inclusive cap**, quantity **one**, unlocked/full-price purchase, no trade-in, and **no AppleCare**. Payment submission is not implemented. Stock monitoring and Discord delivery continue independently.
+The background API worker now connects verified stock to one-phone pickup checkout, earliest available slot selection, local contact/billing, current-key card encryption, a fresh tax-inclusive review, and an optional single Place Order request. It runs separately from stock polling. Review-only is the default; the dashboard checkbox explicitly enables one submission for that run, capped at $2,300 including tax with no AppleCare.
 
-1. Run **Setup-Beta.cmd** once to prepare the checksum-verified portable Node runtime; Chrome must also be installed.
-2. Open the dashboard. In **Checkout beta**, choose any watched store or a specific store and either Duo color or a specific color.
-3. Click **Arm Duo beta**. The next current, verified available-stock observation selects one matching phone and opens the dedicated Apple browser.
-4. Alternatively, **Test iPhone 17e** performs a fresh stock check for the diagnostic **256GB Black iPhone 17e (`MHRN4LL/A`)**, then runs the same preparation path. It never adds this part to Duo monitoring or Discord stock alerts.
-5. Use **Stop beta** to halt automation. Inspect and clear the separate browser bag, check the empty-bag box, and **Reset beta** before another run. The browser remains open for inspection. Restarting the monitor disarms a waiting run and preserves an interrupted preparation as needing attention.
+The test selector supports iPhone 17 White 256GB and iPhone 17e Black 256GB. `Test-Checkout.cmd` prepares the selected test phone for review. `Test-Checkout.cmd --submit-once` enables a single live order attempt using the private local profile. Apple is a live merchant, not a payment sandbox: use a deliberately nonchargeable test profile when testing declines.
 
-The companion verifies an empty bag, exact part, all product options, and the selected upfront price before one add attempt. It never blindly retries an ambiguous add. A durable run lock prevents concurrent phones or automatic rearming. Browser cookies/payment information stay in Apple's local browser profile under ignored `.data/`; do not put card details in chat or this repository.
+Every selected checkout result enters a durable Discord outbox with product/store links, a profile alias, price and measured timings. Unknown order outcomes pause and never replay the final submission. Restarting invalidates unused order grants. Private profiles, cookies and timing traces remain ignored under `.data/`.
 
-**Current live-test limitation:** Apple rejected the isolated diagnostic session with **HTTP 541**, including a native Add to Bag click over the direct connection; the bag was confirmed empty afterward. The user's regular browser did reach pickup selection. The beta therefore pauses with **Needs attention**. Pickup selection, populated-bag quantity controls, final tax-inclusive totals, and checkout are **not yet automated or verified**. A `review_ready` state requires every product/store/quantity/AppleCare/currency/tax/total fact to be verified within the limit; the current browser adapter does not invent those facts.
+**Current limitation:** integrated live iPhone 17 tests reached a confirmed Apple payment decline and automatically delivered the result webhook. Measured flow time was approximately **91 seconds**, with several roughly ten-second checkout responses. Sub-ten-second performance has **not** been achieved. Refract native analysis established request fields, fixed metadata, per-request fetch IDs and session routines; it did not prove that our adapter matches its speed.
 
-**Connection recovery:** the direct connection repeatedly returned HTTP 541. Persistent verified proxy sessions subsequently recovered all 19 stores and 38 products across repeated live five-second sweeps. This is a verified recovery, not an uptime guarantee; use the coverage and last successful check on the dashboard to judge whether current inventory is known.
+The beta is left stopped pending further latency work. The stock monitor remains independent and checks every five seconds. Event wakeups reduce idle notification and checkout-dispatch delay without increasing Apple polling frequency.
 
-**Later API investigation:** an explicitly authorized API test did complete the iPhone 17e pickup/billing/Place Order path and received a real Apple payment decline, followed by a private-channel failure webhook. The reusable API modules and durable guards are experimental; they are not wired into the dashboard's browser beta, and the subsequent iPhone 17 timed test was not completed. Beta development is paused while the stock monitor runs independently. No unattended order submission is enabled by default.
-
-The browser companion now clicks Apple's native button instead of reconstructing an add request. Checkout uses the local connection with no configured monitoring proxies. A separate [REA investigation of Refract's Apple HTTP workflow](research/REFRACT-APPLE.md) records session bootstrap, cart-route branches and pickup model actions for the API beta; these findings are not a claim of successful automated checkout.
-
-See the [live REA evidence and test results](research/BETA-CHECKOUT-EVIDENCE.md) and [checkout investigation](research/CHECKOUT-AUTOMATION.md).
+See [the REA findings](research/REFRACT-APPLE.md). No proprietary executable, disassembly, payment information or credentials are published.

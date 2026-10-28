@@ -2,6 +2,7 @@ import copy
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from urllib import request, error
 import json
 import threading
@@ -359,6 +360,34 @@ class BetaTests(unittest.TestCase):
         self.beta.finish(run,{"status":"blocked","stage":"order_submission"})
         self.assertEqual(self.beta.snapshot()["status"],"needs_attention")
         with self.assertRaises(BetaError):self.beta.reset(True)
+
+    def test_api_test_selects_approved_iphone17_and_preserves_explicit_submission_policy(self):
+        self.beta.arm(is_test=True, backend='api', submit_once=True, test_part='MG474LL/A')
+        job = self.beta.claim()
+        self.assertEqual(job['test_part'], 'MG474LL/A')
+        rows = {('R654', 'MG474LL/A'): {'status': 'available', 'verified': True}}
+        self.beta.test_stock_checked(job['run_id'], rows)
+        selected = self.beta.claim()
+        target = json.loads(selected['target_json'])
+        self.assertEqual((target['part'], target['model'], target['color']), ('MG474LL/A', 'iPhone 17', 'White'))
+        self.assertEqual(selected['backend'], 'api')
+        self.assertEqual(selected['submit_once'], 1)
+        self.assertFalse(self.beta.snapshot()['order_submission_authorized'])
+
+    def test_stale_review_is_rejected_before_a_one_order_grant(self):
+        job, proof = self.prepare_order_review()
+        with patch('checkout_beta.time.time', return_value=10**12):
+            with self.assertRaises(BetaError): self.beta.authorize_order_once(job['run_id'], proof)
+        self.assertFalse(self.beta.snapshot()['order_submission_authorized'])
+
+    def test_authorization_does_not_extend_the_original_review_lifetime(self):
+        job, proof = self.prepare_order_review(); run = job['run_id']
+        observed = self.beta._current()['updated_at']
+        with patch('checkout_beta.time.time', return_value=observed + 29):
+            self.beta.authorize_order_once(run, proof)
+        with patch('checkout_beta.time.time', return_value=observed + 31):
+            with self.assertRaises(BetaError): self.beta.claim_mutation(run, 'place_order', 'order_submission')
+        self.assertFalse(self.beta.snapshot()['order_submission_attempted'])
 
 
 if __name__ == '__main__':

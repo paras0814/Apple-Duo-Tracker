@@ -18,8 +18,12 @@ TEST_PRODUCT = {
     "part": TEST_PART, "model": "iPhone 17e", "storage": "256GB", "color": "Black",
     "buy_url": "https://www.apple.com/shop/buy-iphone/iphone-17e/6.1-inch-display-256gb-black-unlocked",
 }
+TEST_PRODUCTS = {TEST_PART: TEST_PRODUCT, "MG474LL/A": {
+    "part": "MG474LL/A", "model": "iPhone 17", "storage": "256GB", "color": "White",
+    "buy_url": "https://www.apple.com/shop/buy-iphone/iphone-17/6.3-inch-display-256gb-white-unlocked",
+}}
 ACTIVE = {"armed", "checking_stock", "checking_stock_running", "queued", "preparing", "needs_attention", "review_ready"}
-MUTATIONS = {"add_to_cart", "checkout_entry", "guest_login", "select_pickup", "select_store", "select_slot", "pickup_contact", "billing", "payment_validation"}
+MUTATIONS = {"add_to_cart", "checkout_entry", "guest_login", "checkout_start", "select_pickup", "select_store", "select_slot", "pickup_contact", "select_credit", "zip_lookup", "billing", "payment_validation"}
 
 
 def _mutation_key(value):
@@ -97,6 +101,13 @@ class CheckoutBeta:
                 preferred_store TEXT, preferred_part TEXT, target_json TEXT,
                 stage TEXT, message TEXT, created_at REAL, updated_at REAL,
                 cancel_requested INTEGER DEFAULT 0, review_json TEXT)""")
+            columns = {row[1] for row in self.db.execute("PRAGMA table_info(beta_runs)")}
+            for name, declaration in (("backend", "TEXT NOT NULL DEFAULT 'browser'"),
+                                      ("submit_once", "INTEGER NOT NULL DEFAULT 0"),
+                                      ("test_part", "TEXT NOT NULL DEFAULT 'MHRN4LL/A'"),
+                                      ("result_json", "TEXT")):
+                if name not in columns:
+                    self.db.execute(f"ALTER TABLE beta_runs ADD COLUMN {name} {declaration}")
             self.db.execute("""CREATE TABLE IF NOT EXISTS beta_api_checkpoints (
                 run_id TEXT PRIMARY KEY, phase TEXT NOT NULL, facts_json TEXT NOT NULL,
                 updated_at REAL NOT NULL)""")
@@ -115,6 +126,9 @@ class CheckoutBeta:
             self.db.execute("""CREATE TABLE IF NOT EXISTS beta_order_authorizations (
                 run_id TEXT PRIMARY KEY, review_json TEXT NOT NULL, authorized_at REAL NOT NULL,
                 invalidated_at REAL, claimed_at REAL, claim_token TEXT)""")
+            grant_columns = {row[1] for row in self.db.execute("PRAGMA table_info(beta_order_authorizations)")}
+            if "review_observed_at" not in grant_columns:
+                self.db.execute("ALTER TABLE beta_order_authorizations ADD COLUMN review_observed_at REAL NOT NULL DEFAULT 0")
             # An unspent authorization is not a promise that a restarted session's
             # current review is still the same. It must never auto-submit.
             self.db.execute("UPDATE beta_runs SET status='needs_attention',message='Order preparation restarted. Reconcile the current Apple review before proceeding.',updated_at=? WHERE run_id IN (SELECT run_id FROM beta_order_authorizations WHERE claimed_at IS NULL AND invalidated_at IS NULL)", (time.time(),))
@@ -138,25 +152,36 @@ class CheckoutBeta:
                       "order_submission_authorized": False, "order_submission_attempted": False,
                       "pickup_slot_strategy": "earliest",
                       "test_product": TEST_PRODUCT, "can_arm": True}
+            result.update(backend="api", submit_once=False, test_products=TEST_PRODUCTS)
             if current:
                 target = json.loads(current["target_json"]) if current["target_json"] else None
                 review = json.loads(current["review_json"]) if current["review_json"] else None
                 result.update(run_id=current["run_id"], status=current["status"], is_test=bool(current["is_test"]),
                               stage=current["stage"], message=current["message"], target=target, review=review,
                               updated_at=current["updated_at"], can_arm=current["status"] not in ACTIVE and self.worker_run is None)
+                result.update(backend=current["backend"], submit_once=bool(current["submit_once"]),
+                              test_part=current["test_part"], result=json.loads(current["result_json"] or "{}"))
             result["worker_active"] = self.worker_run is not None
             if current:
                 result["api"] = self.resume_info(current["run_id"])
                 failures = self.db.execute("SELECT delivery,COUNT(*) AS count FROM beta_failure_alerts WHERE run_id=? GROUP BY delivery", (current["run_id"],)).fetchall()
                 result["failure_alerts"] = {r["delivery"]: r["count"] for r in failures}
-                grant = self.db.execute("SELECT invalidated_at,claimed_at FROM beta_order_authorizations WHERE run_id=?", (current["run_id"],)).fetchone()
+                grant = self.db.execute("SELECT invalidated_at,claimed_at,authorized_at,review_observed_at FROM beta_order_authorizations WHERE run_id=?", (current["run_id"],)).fetchone()
                 if grant:
-                    result["order_submission_authorized"] = grant["invalidated_at"] is None and grant["claimed_at"] is None and not current["cancel_requested"]
+                    now = time.time()
+                    result["order_submission_authorized"] = (grant["invalidated_at"] is None and grant["claimed_at"] is None and not current["cancel_requested"]
+                                                               and 0 <= now - grant["authorized_at"] <= 30 and 0 <= now - grant["review_observed_at"] <= 30)
                     result["order_submission_attempted"] = grant["claimed_at"] is not None
                     result["payment_submission"] = result["order_submission_authorized"] or result["order_submission_attempted"]
             return result
 
-    def arm(self, *, is_test=False, store_id=None, part=None):
+    def arm(self, *, is_test=False, store_id=None, part=None, backend="browser", submit_once=False, test_part=TEST_PART):
+        if backend not in ("api", "browser") or type(submit_once) is not bool or type(is_test) is not bool:
+            raise BetaError("Choose a supported checkout mode and an explicit one-order submission option.")
+        if submit_once and backend != "api":
+            raise BetaError("One-order submission is supported only by the API beta.")
+        if test_part not in TEST_PRODUCTS:
+            raise BetaError("Choose a supported 256GB test phone.")
         if store_id is not None and store_id not in self.stores:
             raise BetaError("Choose a watched NJ or Manhattan store.")
         if part is not None and part not in self.parts:
@@ -168,14 +193,14 @@ class CheckoutBeta:
             now = time.time()
             run_id = uuid.uuid4().hex
             status = "checking_stock" if is_test else "armed"
-            message = "Checking live pickup stock for the test iPhone 17e." if is_test else "Waiting for verified 256GB stock at a watched store."
-            self.db.execute("INSERT INTO beta_runs (run_id,status,is_test,preferred_store,preferred_part,target_json,stage,message,created_at,updated_at) VALUES (?,?,?,?,?,NULL,?,?,?,?)",
-                            (run_id, status, int(is_test), store_id, part, "waiting_for_stock", message, now, now))
+            message = f"Checking live pickup stock for the test {TEST_PRODUCTS[test_part]['model']}." if is_test else "Waiting for verified 256GB stock at a watched store."
+            self.db.execute("INSERT INTO beta_runs (run_id,status,is_test,preferred_store,preferred_part,target_json,stage,message,created_at,updated_at,backend,submit_once,test_part) VALUES (?,?,?,?,?,NULL,?,?,?,?,?,?,?)",
+                            (run_id, status, int(is_test), store_id, part, "waiting_for_stock", message, now, now, backend, int(submit_once), test_part))
         return self.snapshot()
 
     def _target(self, sid, part, *, is_test=False):
         store = self.stores[sid]
-        product = TEST_PRODUCT if is_test else {"part": part, "model": "iPhone Duo", **self.parts[part], "buy_url": self.buy_url(part)}
+        product = TEST_PRODUCTS[part] if is_test else {"part": part, "model": "iPhone Duo", **self.parts[part], "buy_url": self.buy_url(part)}
         return {**product, "store_id": sid, "store_name": store["name"], "store_zip": store["zip"],
                 "max_total_cents": MAX_TOTAL_CENTS, "quantity": 1, "applecare": False,
                 "mode": "review_only", "is_test": is_test, "pickup_slot_strategy": "earliest"}
@@ -218,9 +243,10 @@ class CheckoutBeta:
             # Prefer the requested store, then World Trade Center, then catalog order.
             choices = [current["preferred_store"]] if current["preferred_store"] else ["R654", *self.stores]
             for sid in dict.fromkeys(choices):
-                observed = observations.get((sid, TEST_PART), {})
+                test_part = current["test_part"]
+                observed = observations.get((sid, test_part), {})
                 if observed.get("status") == "available" and observed.get("verified"):
-                    target = self._target(sid, TEST_PART, is_test=True)
+                    target = self._target(sid, test_part, is_test=True)
                     self.db.execute("UPDATE beta_runs SET status='queued',target_json=?,stage='stock_selected',message=?,updated_at=? WHERE run_id=?",
                                     (json.dumps(target), f'Test phone available at Apple {target["store_name"]}. Preparing one for review.', time.time(), run_id))
                     return
@@ -270,8 +296,13 @@ class CheckoutBeta:
                 raise BetaError("Order authorization requires the exact one-phone, no-AppleCare, tax-inclusive review within $2,300.")
             saved = json.loads(current["review_json"] or "{}")
             if current["status"] == "preparing":
-                checkpoint = self.db.execute("SELECT phase,facts_json FROM beta_api_checkpoints WHERE run_id=?", (run_id,)).fetchone()
+                checkpoint = self.db.execute("SELECT phase,facts_json,updated_at FROM beta_api_checkpoints WHERE run_id=?", (run_id,)).fetchone()
                 saved = json.loads(checkpoint["facts_json"]) if checkpoint and checkpoint["phase"] == "review_ready" else {}
+                observed_at = checkpoint["updated_at"] if checkpoint else 0
+            else:
+                observed_at = current["updated_at"]
+            if not 0 <= time.time() - observed_at <= 30:
+                raise BetaError("The verified review is stale. Fetch and validate a fresh Apple review before submission.")
             if _verified_review(target, saved) != proof:
                 raise BetaError("Persist the matching verified review before authorizing its order.")
             if self.resume_info(run_id)["requires_reconciliation"]:
@@ -282,7 +313,7 @@ class CheckoutBeta:
                 if existing["claimed_at"] is not None or existing["invalidated_at"] is not None or existing["review_json"] != encoded:
                     raise BetaError("This run's one-order authorization was consumed, invalidated or bound to a different review.")
             else:
-                self.db.execute("INSERT INTO beta_order_authorizations (run_id,review_json,authorized_at) VALUES (?,?,?)", (run_id, encoded, time.time()))
+                self.db.execute("INSERT INTO beta_order_authorizations (run_id,review_json,authorized_at,review_observed_at) VALUES (?,?,?,?)", (run_id, encoded, time.time(), observed_at))
             self.db.execute("UPDATE beta_runs SET review_json=?,updated_at=? WHERE run_id=?", (encoded, time.time(), run_id))
         return self.snapshot()
 
@@ -304,6 +335,10 @@ class CheckoutBeta:
                 proof = _verified_review(json.loads(current["target_json"] or "{}"), json.loads(current["review_json"] or "{}"))
                 if proof is None or json.dumps(proof, sort_keys=True) != grant["review_json"]:
                     raise BetaError("The reviewed order changed after authorization.")
+                observed_at = grant["review_observed_at"]
+                now = time.time()
+                if not 0 <= now - observed_at <= 30 or not 0 <= now - grant["authorized_at"] <= 30:
+                    raise BetaError("The one-order authorization or Apple review expired. Recheck the current review before submitting.")
             elif grant and grant["claimed_at"] is not None:
                 raise BetaError("An order was already attempted for this run; no further mutations are allowed.")
             elif (not current or current["run_id"] != run_id or current["status"] != "preparing"
@@ -401,6 +436,20 @@ class CheckoutBeta:
             row = self.db.execute("SELECT id,delivery FROM beta_failure_alerts WHERE run_id=? AND event_key=?", (run_id, event["event_key"])).fetchone()
             return dict(row)
 
+    def record_result(self, run_id, event):
+        from beta.alerts import normalize_result, checkout_result_payload
+        event = normalize_result(event)
+        with self.lock, self.db:
+            run = self.db.execute("SELECT target_json FROM beta_runs WHERE run_id=?", (run_id,)).fetchone()
+            if not run or not run["target_json"]:
+                raise BetaError("A checkout result needs an existing selected target.")
+            target = json.loads(run["target_json"])
+            payload = checkout_result_payload(event, target, self.stores.get(target.get("store_id"), {}))
+            now = time.time()
+            self.db.execute("INSERT OR IGNORE INTO beta_failure_alerts (run_id,event_key,event_json,payload_json,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+                            (run_id, event["event_key"], json.dumps(event), json.dumps(payload), now, now))
+            return dict(self.db.execute("SELECT id,delivery FROM beta_failure_alerts WHERE run_id=? AND event_key=?", (run_id, event["event_key"])).fetchone())
+
     def claim_failure_alert(self):
         with self.lock, self.db:
             row = self.db.execute("SELECT * FROM beta_failure_alerts WHERE delivery='pending' AND next_attempt<=? ORDER BY id LIMIT 1", (time.time(),)).fetchone()
@@ -419,6 +468,8 @@ class CheckoutBeta:
                 delivery, delay = "delivered", 0
             elif failure is None or getattr(failure, "ambiguous", False):
                 delivery, delay = "uncertain", 0
+            elif getattr(failure, "terminal", False):
+                delivery, delay = "failed", 0
             else:
                 delivery = "pending"
                 delay = max(float(getattr(failure, "retry_after", 0)), min(300, 5 * 2 ** min(row["attempts"], 6)))
@@ -427,7 +478,7 @@ class CheckoutBeta:
 
     def finish(self, run_id, result):
         status = result.get("status")
-        if status not in ("review_ready", "needs_attention", "blocked"):
+        if status not in ("review_ready", "needs_attention", "blocked", "order_accepted"):
             status = "needs_attention"
         with self.lock, self.db:
             if self.worker_run == run_id:
@@ -437,6 +488,11 @@ class CheckoutBeta:
                 return
             review = result.get("review") or {}
             target = json.loads(row["target_json"] or "{}")
+            if status == "order_accepted":
+                order = self.db.execute("SELECT status,facts_json FROM beta_api_mutations WHERE run_id=? AND mutation_key='place_order'", (run_id,)).fetchone()
+                if not order or order["status"] != "confirmed" or json.loads(order["facts_json"]).get("order_result") != "accepted":
+                    status = "needs_attention"
+                    result = {**result, "message": "Order acceptance could not be independently confirmed. Inspect this run before continuing."}
             if status == "review_ready":
                 valid = (review.get("part") == target.get("part") and review.get("store_id") == target.get("store_id")
                          and type(review.get("quantity")) is int and review["quantity"] == 1 and review.get("applecare") is False
@@ -455,8 +511,11 @@ class CheckoutBeta:
                 stage = _phase(result.get("stage", "review"))
             except BetaError:
                 stage = "unknown"
-            self.db.execute("UPDATE beta_runs SET status=?,stage=?,message=?,review_json=?,updated_at=? WHERE run_id=?",
-                            (status, stage, safe_text(result.get("message", "Review the beta session."), 500), json.dumps(allowed), time.time(), run_id))
+            timings = result.get("timings_ms", {})
+            safe_result = {"timings_ms": {k: v for k, v in timings.items() if isinstance(k, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", k) and type(v) is int and 0 <= v <= 86_400_000}} if isinstance(timings, dict) else {}
+            safe_result.update(status=status, order_placed=status == "order_accepted")
+            self.db.execute("UPDATE beta_runs SET status=?,stage=?,message=?,review_json=?,result_json=?,updated_at=? WHERE run_id=?",
+                            (status, stage, safe_text(result.get("message", "Review the beta session."), 500), json.dumps(allowed), json.dumps(safe_result), time.time(), run_id))
         if isinstance(result.get("failure"), dict):
             self.record_failure(run_id, result["failure"])
 

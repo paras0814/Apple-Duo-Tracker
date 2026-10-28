@@ -117,6 +117,7 @@ class AppleClient:
             except (OSError, ValueError, http.cookiejar.LoadError):
                 raise APIError("session", "The private API session could not be loaded.") from None
         self._lock = threading.RLock()
+        self.timing_file = folder / (run_id + ".timings.jsonl")
         if session_factory is None:
             self._session = _new_session(self.root, self._jar)
         else:
@@ -213,6 +214,7 @@ class AppleClient:
             mutated = _mutating(method, url)
             for hop in range(6):
                 try:
+                    network_started = time.monotonic()
                     raw = self._session.request(method, url, headers=self._request_headers(method, url, headers), data=body,
                                                 allow_redirects=False, proxy="", proxies={},
                                                 timeout=20, verify=self._session.verify)
@@ -228,6 +230,17 @@ class AppleClient:
                     response_headers = {str(k).lower(): str(v) for k, v in raw.headers.items()
                                         if str(k).lower() not in {"set-cookie", "cookie", "authorization"}}
                     self._save()
+                    try:
+                        elapsed = getattr(raw, "elapsed", None)
+                        action = dict(parse_qsl(urlsplit(url).query)).get("_a", "")
+                        timing = {"method": method, "path": urlsplit(url).path,
+                                  "action": action if re.fullmatch(r"[A-Za-z0-9_]{0,80}", action) else "",
+                                  "status": status, "client_ms": round((time.monotonic()-network_started)*1000),
+                                  "network_ms": round(elapsed.total_seconds()*1000) if hasattr(elapsed, "total_seconds") else None}
+                        with self.timing_file.open("a", encoding="utf8") as trace:
+                            trace.write(json.dumps(timing) + "\n")
+                    except Exception:
+                        pass
                 except APIError as exc:
                     exc.ambiguous = exc.ambiguous or mutated
                     raise

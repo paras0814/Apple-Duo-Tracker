@@ -11,12 +11,14 @@ from html.parser import HTMLParser
 import json
 from pathlib import Path
 import re
+import secrets
 import time
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from beta.apple_client import (APIError, AppleClient, MAX_TOTAL_CENTS, PARTS,
                                assert_empty_bag, parse_init_data, safe_url, validate_bag)
 from beta.payment import (PaymentError, build_us_billing_payload,
+                          build_order_payload, classify_order_response,
                           classify_apple_payment_response, encrypt_card, validate_profile)
 from beta.slots import SlotError, choose_earliest_slot
 
@@ -39,6 +41,12 @@ class BetaGuard:
         return self.beta.resume_info(self.run_id)
     def cancelled(self):
         return bool(self.stop and self.stop.is_set()) or self.beta.cancelled(self.run_id)
+    def has_order_grant(self, review):
+        snapshot=self.beta.snapshot()
+        saved=snapshot.get("review")
+        return (snapshot.get("run_id")==self.run_id and not self.cancelled()
+                and snapshot.get("order_submission_authorized") is True
+                and isinstance(saved,dict) and saved==review)
 
 
 def _node(model, *path):
@@ -157,13 +165,53 @@ def _action(node, key, origin, path, module, *, stage=None):
     return url
 
 
+def _fetch_call_id():
+    milliseconds = int(time.time() * 1000)
+    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+    suffix = ""
+    while milliseconds:
+        milliseconds, remainder = divmod(milliseconds, 36)
+        suffix = alphabet[remainder] + suffix
+    return "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz1234567890") for _ in range(10)) + "-" + (suffix or "0")
+
+
 def _headers(model, origin, referer=None):
     meta=_node(model,"meta").get("h")
     if not isinstance(meta,dict) or not meta or not all(isinstance(k,str) and isinstance(v,str) for k,v in meta.items()):
         raise APIError("model_headers", "Apple did not advertise current checkout request headers.")
-    return {**meta,"x-requested-with":"Fetch","Accept":"*/*",
+    return {**meta,"x-requested-with":"Fetch","x-aos-ui-fetch-call-1":_fetch_call_id(),"Accept":"*/*",
             "Content-Type":"application/x-www-form-urlencoded","Origin":origin,
             "Referer":referer or origin+"/shop/checkout"}
+
+
+def _guest_fields(signin):
+    """Only the observed DEVICEID contract; unknown required work fails closed."""
+    guest=_node(signin,"guestLogin")
+    def challenge_present(value, depth=0):
+        if depth>24:return True
+        if isinstance(value,dict):
+            for key,child in value.items():
+                if (re.search(r"hash[ _-]*cash",str(key),re.I)
+                        and child not in (None,False,"",[],{})):
+                    return True
+                if isinstance(child,(dict,list)) and challenge_present(child,depth+1):return True
+        elif isinstance(value,list):
+            return any(challenge_present(v,depth+1) for v in value)
+        return False
+    if any(challenge_present(node.get(section,{})) for node in (signin,guest) for section in ("d","b")):
+        raise APIError("guest_verification","Apple advertised a guest hashcash challenge without a supported current binding; no guest request was sent.")
+    bindings=guest.get("b",{})
+    if not isinstance(bindings,dict):raise APIError("guest_verification","The current guest form bindings are unsupported.")
+    for name,spec in bindings.items():
+        if not isinstance(spec,dict):continue
+        submitted=spec.get("submit")
+        required=spec.get("required") is True
+        field=spec.get("key",name)
+        if not isinstance(field,str):raise APIError("guest_verification","The current guest form contains an invalid binding.")
+        field=field.removeprefix("d.").removeprefix("signIn.guestLogin.")
+        if (submitted is not None and submitted is not False or required) and field!="deviceID":
+            raise APIError("guest_verification","The current guest form requires an unsupported field; no guest request was sent.")
+    return {"signIn.guestLogin.deviceID":'{"op":"DEVICEID"}'}
 
 
 def _head_redirect(response, *, path, origin=None, continuation=False):
@@ -189,6 +237,8 @@ def _has_errors(value, depth=0):
     if isinstance(value,dict):
         for key,child in value.items():
             if key == "b":continue # Binding definitions contain validation strings.
+            if key == "m" and isinstance(child,list) and any(isinstance(message,dict)
+                    and isinstance(message.get("level"),str) and message["level"].lower()=="error" for message in child):return True
             if key in {"errors","error","errorMessage","validationErrors","fieldErrors"} and child:return True
             if _has_errors(child,depth+1):return True
     elif isinstance(value,list):
@@ -271,17 +321,183 @@ def validate_review(model, plan, bag_facts):
             "currency":"USD","tax_included":True,"total_cents":total}
 
 
-def final_order_hook(client, model, plan, guard, review):
-    """Root integration may replace this with the separately authorized adapter."""
-    return {"status":"needs_attention","stage":"order_adapter", "review":review,
-            "message":"The phone reached verified review. Final order submission is not connected in this adapter.",
-            "order_placed":False}
+ORDER_POLL_LIMIT = 12
+ORDER_POLL_BUDGET_SECONDS = 8.0
+ORDER_POLL_DELAY_SECONDS = 0.25
+
+
+def _order_document(response):
+    """Decode a current response privately, without retaining response text."""
+    try:
+        try:value=response.json()
+        except APIError:value=parse_init_data(response.content)
+        if not isinstance(value,dict):raise ValueError()
+        return value
+    except (ValueError,TypeError,UnicodeError,RecursionError):
+        raise APIError("order_status","The current Apple order response is unrecognized; the order request will not be repeated.",ambiguous=True) from None
+
+
+def _order_continuation(outcome, document, origin):
+    """Only a status/confirmation action advertised in this exact response."""
+    target=safe_url(outcome.continuation_url)
+    p=urlsplit(target)
+    if p.hostname!=urlsplit(origin).hostname or p.port!=urlsplit(origin).port:
+        raise APIError("order_status","Apple moved order processing outside the current checkout host.",ambiguous=True)
+    body=document.get("body",document)
+    if not isinstance(body,dict):raise APIError("order_status","Apple did not provide a current processing model.",ambiguous=True)
+    if outcome.continuation_method=="POST":
+        pairs=parse_qsl(p.query,keep_blank_values=True);args=dict(pairs)
+        key=args.get("_a")
+        expected={"pollingProcess":"/shop/checkoutx","checkStatus":"/shop/checkoutx/statusX"}.get(key)
+        if expected!=p.path or args.get("_m")!="spinner":
+            raise APIError("order_status","Apple advertised an unsupported processing action.",ambiguous=True)
+        spinner=body.get("spinner")
+        if not isinstance(spinner,dict):spinner=body.get("checkout",{}).get("spinner") if isinstance(body.get("checkout"),dict) else None
+        advertised=_action(spinner,key,origin,expected,"spinner")
+        if advertised!=target:raise APIError("order_status","The processing continuation differs from the current advertised action.",ambiguous=True)
+        return "POST",target,b"",_headers(body,origin,origin+"/shop/checkout/status")
+    if outcome.continuation_method=="GET" and p.path in {"/shop/checkout/status","/shop/checkout/thankyou"}:
+        if any(k in {"_a","_m","add-to-cart"} for k,_ in parse_qsl(p.query)):
+            raise APIError("order_status","The confirmation read contains an unsupported action.",ambiguous=True)
+        head=document.get("head",{})
+        data=head.get("data",{}) if isinstance(head,dict) else {}
+        advertised=data.get("url") if isinstance(data,dict) else None
+        if not isinstance(advertised,str) or safe_url(urljoin(origin,advertised))!=target:
+            raise APIError("order_status","Apple did not advertise this confirmation read in its current response.",ambiguous=True)
+        if data.get("method","GET").upper()!="GET":
+            raise APIError("order_status","The confirmation page requires an unsupported method.",ambiguous=True)
+        return "GET",target,None,{"Accept":"text/html","Referer":origin+"/shop/checkout/status"}
+    raise APIError("order_status","The order continuation is not a supported status read.",ambiguous=True)
+
+
+def final_order_hook(client, model, plan, guard, review, *, bag_facts=None, authorize_final=None):
+    """Fresh review GET + trusted policy callback + one consumed order grant.
+
+    No boolean alone grants a purchase. The one final POST is never replayed;
+    subsequent requests can only follow the current server's bounded status or
+    confirmation actions. Returned facts contain no order number or raw model.
+    """
+    if not callable(authorize_final):
+        return {"status":"needs_attention","stage":"order_authorization","review":review,
+                "order_placed":False,"order_submitted":False,
+                "message":"The verified review is ready. A trusted one-run order authorization is required before submission."}
+    bag_facts=bag_facts if isinstance(bag_facts,dict) else {}
+    origin=safe_url("https://"+str(bag_facts.get("checkout_host","")))
+    if not re.fullmatch(r"secure\d{0,3}\.store\.apple\.com",urlsplit(origin).hostname or ""):
+        raise APIError("order_review","The current checkout origin is not verified.")
+    timings={};started=time.monotonic()
+    if guard.cancelled():raise APIError("stopped","The beta was stopped before final review.")
+    guard.progress("review_refresh","Reading the current Apple review before authorizing one order.")
+    current=client.request("GET",origin+"/shop/checkout",headers={"Accept":"text/html","Referer":origin+"/shop/checkout"})
+    observed_at,observed_monotonic=time.time(),time.monotonic()
+    timings["final_review_get"]=round((observed_monotonic-started)*1000)
+    if current.status!=200:raise APIError("order_review","Apple did not return a fresh final review.",current.status)
+    fresh=parse_init_data(current.content)
+    current_review=validate_review(fresh,plan,bag_facts)
+    # Persist the timestamp of this actual response. It is never refreshed from
+    # a seven-fact checkpoint or while waiting for the authorization callback.
+    checkpoint={**bag_facts,**current_review,"review_observed_at":observed_at}
+    guard.checkpoint("review_ready",checkpoint)
+    guard.progress("order_authorization","Checking the explicit one-run order policy against the fresh review.")
+    approval_started=time.monotonic()
+    approved=authorize_final(dict(current_review)) is True
+    timings["order_authorization"]=round((time.monotonic()-approval_started)*1000)
+    has_grant=getattr(guard,"has_order_grant",None)
+    if not approved or not callable(has_grant) or has_grant(current_review) is not True:
+        return {"status":"needs_attention","stage":"order_authorization","review":current_review,
+                "order_placed":False,"order_submitted":False,"timings_ms":timings,
+                "message":"No matching one-run order grant was created for the fresh Apple review."}
+    if (time.monotonic()-observed_monotonic>30 or not -5<=time.time()-observed_at<=30):
+        raise APIError("order_review","The final review expired before submission. A new review and authorization are required.")
+    if guard.cancelled():raise APIError("stopped","The beta was stopped before the final order claim.")
+    place=_node(fresh,"checkout","review","placeOrder")
+    advertised=place.get("a",{}).get("continueFromReviewToProcess",{}).get("url")
+    try:path=urlsplit(safe_url(urljoin(origin,advertised))).path
+    except (ValueError,TypeError):raise APIError("order_action","The current review has no supported final order action.") from None
+    if path not in {"/shop/checkoutx","/shop/checkoutx/review"}:
+        raise APIError("order_action","Apple advertised an unsupported final order path.")
+    url=_action(place,"continueFromReviewToProcess",origin,path,"checkout.review.placeOrder")
+    payload=build_order_payload(fresh,{**current_review,"order_authorized":True,
+                                     "verified_at":observed_at,"country":"US"})
+    headers=_headers(fresh,origin,origin+"/shop/checkout?_s=Review-init")
+    # Recheck immediately before consuming the grant; no network or callback is
+    # allowed between this atomic claim and the sole Place Order operation.
+    if guard.cancelled():raise APIError("stopped","The beta was stopped before placing the order.")
+    token=guard.claim("place_order","order_submission")
+    if not token:raise APIError("order_authorization","The one-run order claim was not granted.")
+    guard.progress("order_submission","Sending the current advertised Place Order action once.")
+    posted_at=time.monotonic();polls=0;outcome=None;http_status=None;network_failed=False;unconfirmed=False
+    try:
+        response=client.request("POST",url,headers=headers,fields=payload)
+        timings["place_order_post"]=round((time.monotonic()-posted_at)*1000)
+        http_status=response.status
+        outcome=classify_order_response(response.status,response.content,response_url=response.url)
+        poll_started=time.monotonic();deadline=poll_started+ORDER_POLL_BUDGET_SECONDS
+        last_response=response
+        while outcome.kind in {"processing","confirmation_pending"} and polls<ORDER_POLL_LIMIT:
+            if guard.cancelled() or time.monotonic()>=deadline:break
+            if polls:
+                delay=ORDER_POLL_DELAY_SECONDS
+                retry_after=last_response.headers.get("retry-after")
+                if retry_after:
+                    try:delay=max(delay,float(retry_after))
+                    except (ValueError,TypeError):break
+                if delay<0 or time.monotonic()+delay>=deadline:break
+                time.sleep(delay)
+            if guard.cancelled() or time.monotonic()>=deadline:break
+            document=_order_document(last_response)
+            method,target,fields,poll_headers=_order_continuation(outcome,document,origin)
+            guard.progress("order_processing","Reading only Apple's current advertised order status.")
+            last_response=client.request(method,target,headers=poll_headers,fields=fields)
+            polls+=1;http_status=last_response.status
+            outcome=classify_order_response(last_response.status,last_response.content,response_url=last_response.url)
+        timings["order_processing"]=round((time.monotonic()-poll_started)*1000)
+    except Exception as exc:
+        # A timeout, unsupported hop or interrupted poll cannot prove a decline
+        # or a failure to place an order. The consumed grant is never retried.
+        unconfirmed=True
+        network_failed=isinstance(exc,(OSError,TimeoutError)) or getattr(exc,"stage",None)=="request"
+    timings.setdefault("place_order_post",round((time.monotonic()-posted_at)*1000))
+    kind=outcome.kind if outcome is not None and not unconfirmed else "unknown"
+    accepted=kind=="accepted" and outcome.order_accepted is True
+    declined=kind=="payment_declined"
+    rejected=kind in {"field_validation","checkout_error"}
+    result_value="accepted" if accepted else "declined" if declined else "rejected" if rejected else "unknown"
+    facts={"order_result":result_value,"apple_response_confirmed":accepted or declined or rejected}
+    mutation_outcome="confirmed" if accepted else "rejected" if declined or rejected else "unknown"
+    try:persisted=guard.complete("place_order",token,mutation_outcome,facts) is True
+    except Exception:persisted=False
+    if not persisted:
+        result_value="unknown";accepted=declined=rejected=False
+        facts={"order_result":"unknown","apple_response_confirmed":False}
+    result={"status":"order_accepted" if accepted else "needs_attention",
+            "stage":"order_accepted" if accepted else "payment_declined" if declined else "order_rejected" if rejected else "order_unknown",
+            "review":current_review,"order_placed":True if accepted else False if declined or rejected else None,
+            "order_submitted":True,**facts,"order_polls":polls,"timings_ms":timings}
+    if accepted:
+        result["message"]="Apple returned a structured order confirmation. The one-run order grant is consumed."
+    elif declined:
+        result["message"]="Apple reported a payment decline after the one order attempt. No order request will be replayed."
+        result["failure"]={"classification":"payment_declined","source":"apple","stage":"payment_declined","apple_decline":True,
+                           "reason":"Apple reported a payment decline"}
+    elif rejected:
+        result["message"]="Apple returned a checkout rejection after the one order attempt. No order request will be replayed."
+        result["failure"]={"classification":"validation_failed" if kind=="field_validation" else "unknown_error",
+                           "source":"apple","stage":"order_rejected"}
+    else:
+        result["message"]="The order outcome is unconfirmed. Check Apple before another run; the final order request will not be repeated."
+        result["failure"]={"classification":"network_error" if network_failed else "unknown_error",
+                           "source":"local" if network_failed else "apple","stage":"order_unknown"}
+    if type(http_status) is int:result["http_status"]=http_status
+    return result
 
 
 class _Flow:
-    def __init__(self,root,plan,guard,profile_path,allow_submit_once):
+    def __init__(self,root,plan,guard,profile_path,allow_submit_once,authorize_final=None,prepared_client=None):
         self.root,self.plan,self.guard=Path(root).resolve(),plan,guard
         self.profile_path,self.allow_submit_once=profile_path,allow_submit_once
+        self.authorize_final,self.prepared_client=authorize_final,prepared_client
+        self.used_prepared_client=False
         self.client=None;self.stage="plan";self.started=time.monotonic();self.timings={}
         self.phase_started=self.started
         self.facts={};self.journal={};self.profile=None;self.model=None;self.origin=WWW
@@ -349,7 +565,9 @@ class _Flow:
     def fresh_cart(self):
         p=self.plan
         self.stage_start("session_bootstrap","Verifying a fresh direct Apple API session.")
-        self.client.verify_session(WWW,client_profile="native_compatible_emulation")
+        valid=getattr(self.client,"verification_cookie_valid",lambda *_:False)
+        if valid(WWW) is not True:
+            self.client.verify_session(WWW,client_profile="native_compatible_emulation")
         self.checkpoint("session_ready",session_ready=True)
         self.stage_start("bag_preflight","Confirming that this API session's bag is empty.")
         assert_empty_bag(parse_init_data(self.get(WWW+"/shop/bag").content))
@@ -422,6 +640,8 @@ class _Flow:
             redirect=self.origin+"/shop/signIn"
         if "guest_login" not in self.journal:
             self.stage_start("checkout_verification","Renewing verification on the current Apple checkout host.")
+            # The www cookie can be scoped to all Apple hosts, but that does
+            # not establish verification on the assigned checkout server.
             self.client.verify_session(self.origin,client_profile="native_compatible_emulation")
             self.stage_start("guest_model","Loading fresh guest checkout actions after verification.")
             self.model=parse_init_data(self.get(redirect,referer=WWW+"/shop/bag").content)
@@ -430,7 +650,7 @@ class _Flow:
             guest=_node(signin,"guestLogin")
             url=_action(guest,"guestLogin",self.origin,"/shop/signInx","signIn.guestLogin")
             self.stage_start("guest_login","Continuing as guest without an Apple ID login.")
-            fields={"signIn.guestLogin.deviceID":'{"op":"DEVICEID"}'}
+            fields=_guest_fields(signin)
             continuation,next_url=self.mutate("guest_login","guest_login",url,fields,_headers(self.model,self.origin,redirect),
                 lambda r:_head_redirect(r,path="/shop/checkout/start",origin=self.origin,continuation=True))
             self.checkpoint("guest_login",checkout_host=urlsplit(self.origin).hostname,checkout_path="/shop/checkout/start")
@@ -535,7 +755,16 @@ class _Flow:
         self.facts=dict(info.get("facts") or {})
         self.journal={v["mutation_key"]:v["status"] for v in info.get("mutations",[]) if isinstance(v,dict)}
         if any(s!="confirmed" for s in self.journal.values()):raise APIError("reconciliation","This run contains a rejected or incomplete mutation and cannot automatically repeat it.")
-        self.client=AppleClient(self.root,self.plan["run_id"])
+        if self.prepared_client is not None:
+            expected=self.root/".data/api-runs"/(self.plan["run_id"]+".cookies")
+            if (not hasattr(self.prepared_client,"root") or Path(self.prepared_client.root).resolve()!=self.root
+                    or not hasattr(self.prepared_client,"cookie_file")
+                    or Path(self.prepared_client.cookie_file).resolve()!=expected.resolve()):
+                raise APIError("prepared_session","The prepared API session belongs to another project or run.")
+            self.client=self.prepared_client
+            self.used_prepared_client=True
+        else:
+            self.client=AppleClient(self.root,self.plan["run_id"])
         if "add_to_cart" not in self.journal:self.fresh_cart()
         else:
             self.stage_start("cart_reconciliation","Reading the existing API bag without repeating Add to Bag.")
@@ -546,13 +775,16 @@ class _Flow:
         self.stage_start("review","Checking the exact phone, pickup store, quantity, no AppleCare and tax-inclusive total.")
         review=validate_review(self.model,self.plan,self.facts)
         self.checkpoint("review_ready",**review)
-        if self.allow_submit_once:return final_order_hook(self.client,self.model,self.plan,self.guard,review)
+        if self.allow_submit_once:
+            self.stage_start("order_submission","Submitting only the current verified order under its one-run authorization.")
+            return final_order_hook(self.client,self.model,self.plan,self.guard,review,
+                                    bag_facts=self.facts,authorize_final=self.authorize_final)
         return {"status":"review_ready","stage":"review_ready","review":review,"order_placed":False,
                 "message":"One phone is prepared at the selected store with the earliest valid pickup window. The verified review is within $2,300; no order was submitted."}
 
 
-def run_flow(root,plan,guard,*,profile_path=None,allow_submit_once=False):
-    flow=_Flow(root,plan,guard,profile_path,allow_submit_once)
+def run_flow(root,plan,guard,*,profile_path=None,allow_submit_once=False,authorize_final=None,prepared_client=None):
+    flow=_Flow(root,plan,guard,profile_path,allow_submit_once,authorize_final,prepared_client)
     result=None
     try:
         result=flow.run()
@@ -572,13 +804,18 @@ def run_flow(root,plan,guard,*,profile_path=None,allow_submit_once=False):
                 "failure":{"classification":"unknown_error","source":"local","stage":flow.stage}}
     finally:
         flow.timings[flow.stage]=round((time.monotonic()-flow.phase_started)*1000)
-        if flow.client is not None:
-            try:flow.client.close()
+        owned_client=flow.client if flow.client is not None else flow.prepared_client
+        if owned_client is not None:
+            try:owned_client.close()
             except Exception:
-                result={"status":"needs_attention","stage":"session_persistence","order_placed":False,
-                        "message":"The private API session could not be saved. Inspect this run before continuing."}
+                # Session persistence cannot change Apple's already observed order outcome.
+                if result is not None:
+                    result["persistence_warning"]="The private API session could not be saved. Inspect this run before continuing."
+                else:
+                    result={"status":"needs_attention","stage":"session_persistence","order_placed":None,
+                            "message":"The private API session could not be saved. Inspect this run before continuing."}
     result.update(connection="direct_no_proxy",browser_required=False,
-                  client_profile="native_compatible_emulation",
-                  timings_ms={**flow.timings,"total":round((time.monotonic()-flow.started)*1000)})
+                  client_profile="native_compatible_emulation",prepared_session_reused=flow.used_prepared_client,
+                  timings_ms={**flow.timings,**result.get("timings_ms",{}),"total":round((time.monotonic()-flow.started)*1000)})
     if hasattr(flow,"slot_facts"):result["pickup_slot"]=flow.slot_facts
     return result

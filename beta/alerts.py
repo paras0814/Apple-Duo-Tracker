@@ -132,3 +132,87 @@ def checkout_failure_payload(event, target, store):
         "fields": fields, "timestamp": datetime.now(timezone.utc).isoformat(),
         "footer": {"text": "Apple Duo Tracker • Beta • One phone • No AppleCare"},
     }]}
+
+
+_RESULT_LABELS = {**_LABELS,
+    "review_ready": "Phone prepared for review; no order submitted",
+    "order_accepted": "Apple confirmed the order",
+    "blocked": "Checkout stopped before a verified result",
+}
+_TIMING_STAGES = frozenset({"plan", "session_bootstrap", "session_ready", "bag_preflight", "stock",
+    "product_quote", "adding", "bag_reconciliation", "cart_reconciliation", "checkout_entry",
+    "checkout_verification", "guest_model", "guest_login", "checkout_start", "checkout_reconciliation",
+    "pickup_mode", "store_selection", "pickup_slot", "pickup_contact", "credit_option", "zip_lookup",
+    "billing_validation", "billing_validated", "review", "review_ready", "place_order", "order_submit", "order_submission",
+    "order_processing", "order_poll", "order_confirmation", "final_order", "total", "warm_session"})
+
+
+def sanitize_timings(value):
+    """Keep fixed phase names and bounded durations, never arbitrary labels."""
+    if not isinstance(value, dict):
+        return {}
+    return {key: amount for key, amount in value.items() if key in _TIMING_STAGES
+            and type(amount) is int and 0 <= amount <= 86_400_000}
+
+
+def normalize_result(event):
+    """Sanitize every beta receipt and require evidence for acceptance/decline."""
+    event = event if isinstance(event, dict) else {}
+    kind = event.get('classification', event.get('kind', 'unknown_error'))
+    kind = _KINDS.get(kind, kind) if isinstance(kind, str) else 'unknown_error'
+    if kind not in _RESULT_LABELS:
+        kind = 'unknown_error'
+    if kind == 'order_accepted' and not (event.get('source') == 'apple'
+            and event.get('order_result') == 'accepted' and event.get('apple_response_confirmed') is True
+            and event.get('order_placed') is True):
+        kind = 'unknown_error'
+    if kind == 'review_ready' and event.get('review_confirmed') is not True:
+        kind = 'unknown_error'
+    if kind == 'payment_declined' and not (event.get('source') == 'apple' and event.get('apple_decline') is True):
+        kind = 'unknown_error'
+    base = normalize_failure({**event, 'classification': kind})
+    base.update(classification=kind, reason=_RESULT_LABELS[kind],
+                code='BETA_' + {'unknown_error': 'UNKNOWN_RESULT'}.get(kind, kind.upper()))
+    alias = event.get('profile_alias', event.get('profile_name'))
+    base.pop('profile_name', None)
+    if isinstance(alias, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,31}', alias):
+        base['profile_alias'] = alias
+    base['timings_ms'] = sanitize_timings(event.get('timings_ms'))
+    if kind == 'order_accepted':
+        base.update(order_result='accepted', order_placed=True, apple_response_confirmed=True)
+    elif kind == 'payment_declined':
+        base.update(order_result='declined', order_placed=False, apple_decline=True)
+    elif kind == 'review_ready':
+        base.update(order_result='not_submitted', order_placed=False, review_confirmed=True)
+    else:
+        outcome = event.get('order_result')
+        base['order_result'] = outcome if outcome in ('rejected', 'unknown', 'not_submitted') else 'unknown'
+        base['order_placed'] = None if base['order_result'] == 'unknown' else False
+    identity = {key: base[key] for key in ('classification', 'source', 'stage', 'code')}
+    base['event_key'] = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    return base
+
+
+def checkout_result_payload(event, target, store):
+    """One sanitized receipt for review, acceptance, decline or a stopped run."""
+    event = normalize_result(event)
+    # Reuse existing catalog-link and product/store formatting. Remove its
+    # failure-specific result/reason fields, then insert the fixed result label.
+    payload = checkout_failure_payload({**event, 'classification': 'unknown_error'}, target, store)
+    embed = payload['embeds'][0]
+    embed['title'] = {'review_ready': 'Beta review ready | Apple US',
+                      'order_accepted': 'Beta order confirmed | Apple US',
+                      'payment_declined': 'Beta payment declined | Apple US'}.get(
+                          event['classification'], 'Beta checkout stopped | Apple US')
+    embed['color'] = 0x37A66A if event['classification'] in ('review_ready', 'order_accepted') else 0xED6A5A
+    embed['fields'] = [field for field in embed['fields'] if field['name'] not in ('Result', 'Reason', 'Profile')]
+    embed['fields'].append({'name': 'Result', 'value': event['reason']})
+    if event.get('profile_alias'):
+        embed['fields'].append({'name': 'Profile alias', 'value': event['profile_alias'], 'inline': True})
+    timings = event['timings_ms']
+    if timings:
+        ordered = [('total', timings['total'])] if 'total' in timings else []
+        ordered += [(key, value) for key, value in timings.items() if key != 'total'][:8]
+        text = '\n'.join(key.replace('_', ' ') + ': ' + f'{value / 1000:.3f}s' for key, value in ordered)
+        embed['fields'].append({'name': 'Timings', 'value': text[:1024]})
+    return payload

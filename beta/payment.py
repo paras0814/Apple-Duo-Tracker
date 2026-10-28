@@ -390,7 +390,7 @@ def build_order_payload(current_model, review_proof) -> PrivateBillingPayload:
     verified = p.get('verified_at')
     if (p.get('order_authorized') is not True or type(verified) not in (int, float)
             or not math.isfinite(verified) or not -5 <= time.time() - verified <= 30
-            or not isinstance(p.get('part'), str) or p['part'] not in {'MK1F4LL/A', 'MK1E4LL/A', 'MHRN4LL/A'}
+            or not isinstance(p.get('part'), str) or p['part'] not in {'MK1F4LL/A', 'MK1E4LL/A', 'MHRN4LL/A', 'MG474LL/A'}
             or not isinstance(p.get('store_id'), str) or not re.fullmatch(r'R[0-9]{3}', p['store_id'])
             or type(p.get('quantity')) is not int or p['quantity'] != 1 or p.get('applecare') is not False
             or p.get('currency') != 'USD' or p.get('tax_included') is not True
@@ -490,6 +490,9 @@ def classify_order_response(status, body, *, response_url=None) -> OrderOutcome:
             if isinstance(order_number, str) and re.fullmatch(r'[A-Za-z0-9-]{5,40}', order_number):
                 return result('accepted', 'Apple returned a structured order confirmation.', accepted=True)
         candidates = list(_strings(model.get('head', {})))
+        body_node = model.get('body', model)
+        if isinstance(body_node, dict) and isinstance(body_node.get('spinner'), dict):
+            candidates.extend(_strings(body_node['spinner'].get('a', {})))
         if isinstance(checkout, dict) and isinstance(checkout.get('spinner'), dict):
             candidates.extend(_strings(checkout['spinner'].get('a', {})))
         from beta.apple_client import safe_url

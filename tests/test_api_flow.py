@@ -81,29 +81,36 @@ def review():
     return {"fulfillmentReview":{"reviewGroup-1":{"d":{"pickup":{"storeName":"Apple World Trade Center","storeId":"R654"}},
         ITEM:{"d":{"sku":PART,"unitPrice":"$699.00","totalPrice":"$699.00","hasAppleCareInstallment":False},"itemQuantity":{"d":{"quantity":1}}}}},
         "summary":{"d":{"subtotal":"$699.00","tax":"$62.04","total":"$761.04"}},
-        "placeOrder":{"a":{"continueFromReviewToProcess":action("continueFromReviewToProcess","checkout.review.placeOrder","/shop/checkoutx/review")}}}
+        "placeOrder":{"a":{"continueFromReviewToProcess":action("continueFromReviewToProcess","checkout.review.placeOrder","/shop/checkoutx/review")},
+                      "termsAndConditions":{"d":{"headerLabel":"Terms"},"b":{}}}}
 
 
 class Guard:
     run_id="fixture-run"
-    def __init__(self):self.status={};self.claims=[];self.points=[];self.current={};self.stopped=False
+    def __init__(self):self.status={};self.claims=[];self.points=[];self.current={};self.stopped=False;self.order_grant=False
     def progress(self,stage,message):pass
     def checkpoint(self,phase,facts):self.points.append(phase);self.current=copy.deepcopy(facts)
     def claim(self,key,phase):
         if key in self.status:raise RuntimeError("No repeat mutation")
+        if key=="place_order":
+            if not self.order_grant:raise RuntimeError("No one-run order grant")
+            self.order_grant=False
         self.status[key]="claimed";self.claims.append((key,phase));return "fixture-intent-"+key
     def complete(self,key,token,outcome,facts=None):
         if self.status.get(key)!="claimed":return False
         self.status[key]=outcome;return True
     def cancelled(self):return self.stopped
+    def has_order_grant(self,review):return self.order_grant and self.current.get("total_cents")==review.get("total_cents")
     def resume_info(self):return {"facts":self.current,"requires_reconciliation":any(v in {"claimed","unknown"} for v in self.status.values()),
         "mutations":[{"mutation_key":k,"status":v} for k,v in self.status.items()]}
 
 
 class Client:
-    last=None;fail_guest=False;wrong_store=False;atc_ambiguous=False;resume=False;billing_failure=False
+    last=None;fail_guest=False;wrong_store=False;atc_ambiguous=False;resume=False;billing_failure=False;order_mode="accepted";price_changed=False;guest_hashcash=False
     def __init__(self,root,run_id):
-        Client.last=self;self.calls=[];self.proofs=[];self.has_item=self.resume;self.closed=False
+        Client.last=self;self.calls=[];self.proofs=[];self.has_item=self.resume;self.closed=False;self.billing_done=False;self.warm=False
+        self.root=Path(root).resolve();self.cookie_file=self.root/".data/api-runs"/(run_id+".cookies")
+    def verification_cookie_valid(self,origin=WWW):return self.warm and origin==WWW
     def verify_session(self,origin,client_profile):self.proofs.append((origin,client_profile));return {"verification_cookie_valid":True}
     def atb_token(self):return "PRIVATE_FIXTURE_ATB_TOKEN"
     def close(self):self.closed=True
@@ -121,12 +128,18 @@ class Client:
             return Response(200,url,b'',{})
         if method=="POST" and a=="checkout":return response({"head":{"status":302,"data":{"url":SECURE+"/shop/signIn?session=PRIVATE_REDIRECT_TOKEN"}}})
         if method=="GET" and p.path=="/shop/signIn":
-            return Response(200,url,html({"meta":metadata(),"signIn":{"d":{"guestCheckoutEnabled":True},"guestLogin":{"a":{"guestLogin":action("guestLogin","signIn.guestLogin","/shop/signInx")}}}}),{})
+            signin={"d":{"guestCheckoutEnabled":True},"guestLogin":{"a":{"guestLogin":action("guestLogin","signIn.guestLogin","/shop/signInx")}}}
+            if self.guest_hashcash:signin["guestLogin"]["d"]={"hashcashChallenge":"PRIVATE_CURRENT_CHALLENGE"}
+            return Response(200,url,html({"meta":metadata(),"signIn":signin}),{})
         if method=="POST" and a=="guestLogin":
             if self.fail_guest:return Response(541,url,b'PRIVATE_SERVER_CARD_OR_CONTACT_ECHO',{})
             return response({"head":{"status":302,"data":{"url":SECURE+"/shop/checkout/start","method":"post","args":{"pltn":"PRIVATE_PLTN"}}}})
         if method=="POST" and p.path=="/shop/checkout/start":return Response(200,url,html(initial()),{})
         if method=="GET" and p.path=="/shop/checkout":
+            if self.billing_done:
+                value=review()
+                if self.price_changed:value["summary"]["d"]["total"]="$762.04"
+                return Response(200,url,html({"meta":metadata(),"checkout":{"review":value}}),{})
             return Response(200,url,html({"meta":metadata(),"checkout":{"pickupContact":contact()}}),{})
         if method=="POST" and a=="selectFulfillmentLocationAction":return response(delta({"checkout":{"fulfillment":{"pickupTab":{"pickup":pickup()}}}}))
         if method=="POST" and a=="select":
@@ -138,7 +151,17 @@ class Client:
         if method=="POST" and a=="zipLookup":return response(delta({"checkout":{"billing":billing(True)}}))
         if method=="POST" and a=="continueFromBillingToReview":
             if self.billing_failure:return response(delta({"checkout":{"billing":{"errors":{"message":"Please enter a valid expiration. PRIVATE_CARD_ECHO"}}}}))
+            self.billing_done=True
             return response(delta({"checkout":{"review":review()}}))
+        if method=="POST" and a=="continueFromReviewToProcess":
+            if self.order_mode=="timeout":raise APIError("request","PRIVATE_NETWORK_ERROR",ambiguous=True)
+            if self.order_mode=="accepted":return response(delta({"checkout":{"d":{"page":"thankyou"},"thankYou":{"d":{"orderNumber":"PRIVATE-ORDER-12345"}}}}))
+            poll=action("pollingProcess","spinner","/shop/checkoutx")
+            if self.order_mode=="external_poll":poll["url"]="https://secure9.store.apple.com"+poll["url"]
+            return response(delta({"spinner":{"a":{"pollingProcess":poll}}}))
+        if method=="POST" and a=="pollingProcess":
+            if self.order_mode=="declined":return response(delta({"checkout":{"m":[{"level":"error","text":"Your card was declined PRIVATE_CARD_CONTACT_ECHO"}]}}))
+            return response(delta({"spinner":{"a":{"pollingProcess":action("pollingProcess","spinner","/shop/checkoutx")}}}))
         raise AssertionError("Unexpected offline fixture request")
 
 
@@ -156,6 +179,7 @@ class FlowTests(unittest.TestCase):
           "card":{"number":"4000000000000002","security_code":"123","expiry_month":12,"expiry_year":2030}}))
         self.guard=Guard()
         Client.last=None;Client.fail_guest=False;Client.wrong_store=False;Client.atc_ambiguous=False;Client.resume=False;Client.billing_failure=False
+        Client.order_mode="accepted";Client.price_changed=False;Client.guest_hashcash=False
         self.patches=[patch("beta.flow.AppleClient",Client),patch("beta.flow.encrypt_card",return_value=EncryptedCard("PRIVATE_ENCRYPTED_PAN","PRIVATE_ENCRYPTED_CVV")),
                       patch("beta.flow.build_us_billing_payload",return_value=PrivateBillingPayload({"cardNumber":"PRIVATE_ENCRYPTED_PAN","securityCode":"PRIVATE_ENCRYPTED_CVV"}))]
         for p in self.patches:p.start()
@@ -275,6 +299,101 @@ class FlowTests(unittest.TestCase):
         with self.assertRaises(APIError):validate_review(model,self.plan,{"base_price_cents":69900})
         pickup["quote"]='<script>Apple World Trade Center</script><b>Apple SoHo</b>'
         with self.assertRaises(APIError):validate_review(model,self.plan,facts)
+
+    def approve_order(self,review):
+        self.assertEqual(self.guard.points[-1],"review_ready")
+        self.assertIn("review_observed_at",self.guard.current)
+        self.guard.order_grant=True
+        return True
+
+    def final_posts(self):
+        return [c for c in Client.last.calls if c[0]=="POST" and dict(parse_qsl(urlsplit(c[1]).query)).get("_a")=="continueFromReviewToProcess"]
+
+    def test_accepted_order_requires_fresh_review_callback_grant_and_one_final_post(self):
+        result=self.run_flow(allow_submit_once=True,authorize_final=self.approve_order)
+        self.assertEqual(result["status"],"order_accepted",result)
+        self.assertTrue(result["order_placed"])
+        self.assertEqual(result["order_result"],"accepted")
+        self.assertTrue(result["apple_response_confirmed"])
+        self.assertEqual(self.guard.status["place_order"],"confirmed")
+        self.assertEqual(len(self.final_posts()),1)
+        self.assertEqual(dict(self.final_posts()[0][2]),{})
+        self.assertIn("final_review_get",result["timings_ms"])
+        self.assertNotIn("PRIVATE",json.dumps(result))
+        self.assertNotIn("fiction@example.com",json.dumps(result))
+
+    def test_boolean_or_callback_without_actual_grant_cannot_send_order(self):
+        result=self.run_flow(allow_submit_once=True)
+        self.assertEqual(result["stage"],"order_authorization")
+        self.assertEqual(self.final_posts(),[])
+        self.assertNotIn("place_order",self.guard.status)
+        # A second test run with a callback that lies about creating a grant.
+        self.guard=Guard();Client.last=None
+        result=self.run_flow(allow_submit_once=True,authorize_final=lambda review:True)
+        self.assertEqual(result["stage"],"order_authorization")
+        self.assertEqual(self.final_posts(),[])
+
+    def test_real_apple_decline_after_advertised_poll_is_rejected_without_replay(self):
+        Client.order_mode="declined"
+        result=self.run_flow(allow_submit_once=True,authorize_final=self.approve_order)
+        self.assertEqual(result["stage"],"payment_declined",result)
+        self.assertEqual(result["order_result"],"declined")
+        self.assertTrue(result["failure"]["apple_decline"])
+        self.assertEqual(self.guard.status["place_order"],"rejected")
+        self.assertEqual(result["order_polls"],1)
+        self.assertEqual(len(self.final_posts()),1)
+        self.assertNotIn("PRIVATE",json.dumps(result))
+
+    def test_ambiguous_final_timeout_consumes_grant_without_automatic_retry(self):
+        Client.order_mode="timeout"
+        result=self.run_flow(allow_submit_once=True,authorize_final=self.approve_order)
+        self.assertEqual(result["order_result"],"unknown",result)
+        self.assertIsNone(result["order_placed"])
+        self.assertEqual(self.guard.status["place_order"],"unknown")
+        self.assertFalse(self.guard.order_grant)
+        self.assertEqual(len(self.final_posts()),1)
+        self.assertNotIn("PRIVATE",json.dumps(result))
+
+    def test_polling_is_bounded_and_cannot_change_checkout_host(self):
+        Client.order_mode="processing_forever"
+        with patch("beta.flow.ORDER_POLL_LIMIT",3),patch("beta.flow.time.sleep"):
+            result=self.run_flow(allow_submit_once=True,authorize_final=self.approve_order)
+        self.assertEqual(result["order_result"],"unknown")
+        self.assertEqual(result["order_polls"],3)
+        self.assertEqual(len(self.final_posts()),1)
+        self.guard=Guard();Client.order_mode="external_poll"
+        result=self.run_flow(allow_submit_once=True,authorize_final=self.approve_order)
+        self.assertEqual(result["order_result"],"unknown")
+        self.assertFalse(any("secure9" in c[1] for c in Client.last.calls))
+        self.assertEqual(len(self.final_posts()),1)
+
+    def test_changed_fresh_review_cannot_use_earlier_checkpoint_or_authorization(self):
+        Client.price_changed=True;approved=[]
+        result=self.run_flow(allow_submit_once=True,authorize_final=lambda r:approved.append(r) or True)
+        self.assertEqual(result["status"],"needs_attention")
+        self.assertEqual(approved,[])
+        self.assertEqual(self.final_posts(),[])
+        self.assertNotIn("place_order",self.guard.status)
+
+    def test_prepared_session_is_bound_reused_and_closed_even_on_early_failure(self):
+        client=Client(self.root,self.plan["run_id"]);client.warm=True
+        result=self.run_flow(prepared_client=client)
+        self.assertEqual(result["status"],"review_ready",result)
+        self.assertTrue(result["prepared_session_reused"])
+        self.assertEqual([p[0] for p in client.proofs],[SECURE])
+        self.assertTrue(client.closed)
+        wrong=Client(self.root,"another-run")
+        self.guard=Guard()
+        result=self.run_flow(prepared_client=wrong)
+        self.assertEqual(result["stage"],"prepared_session")
+        self.assertEqual(wrong.calls,[])
+        self.assertTrue(wrong.closed)
+
+    def test_advertised_unsupported_guest_hashcash_stops_before_guest_claim(self):
+        Client.guest_hashcash=True;result=self.run_flow()
+        self.assertEqual(result["stage"],"guest_verification")
+        self.assertNotIn("guest_login",self.guard.status)
+        self.assertNotIn("PRIVATE",json.dumps(result))
 
 
 if __name__=="__main__":unittest.main()

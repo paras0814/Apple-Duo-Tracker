@@ -236,6 +236,8 @@ class PaymentTests(unittest.TestCase):
             ({'head': {'data': {'url': '/shop/checkout/status'}}}, 'processing'),
             ({'body': {'checkout': {'spinner': {'a': {'poll': {'url':
                 '/shop/checkoutx?_a=pollingProcess&_m=spinner'}}}}}}, 'processing'),
+            ({'body': {'spinner': {'a': {'pollingProcess': {'url':
+                '/shop/checkoutx?_a=pollingProcess&_m=spinner'}}}}}, 'processing'),
             ({'head': {'data': {'url': '/shop/checkout/thankyou'}}}, 'confirmation_pending'),
             ({'body': {'checkout': {'d': {'page': 'thankyou'}, 'thankYou': {'d': {'orderNumber': 'FIXTURE12345'}}}}}, 'accepted'),
             ({'body': {'checkout': {'d': {'page': 'thankyou'}, 'thankYou': {'d': {}}}}}, 'unknown'),

@@ -53,6 +53,13 @@ function renderBeta() {
     selector.value = selectedStore;
   }
   $('beta-state').textContent = beta.status.replaceAll('_',' ');
+  $('beta-submit-once').disabled = betaPosting || !beta.can_arm;
+  $('beta-test-part').disabled = betaPosting || !beta.can_arm;
+  if (!beta.can_arm) $('beta-submit-once').checked = !!beta.submit_once;
+  $('beta-mode').textContent = $('beta-submit-once').checked ? 'ONE ORDER' : 'REVIEW ONLY';
+  const totalMs = beta.result?.timings_ms?.total;
+  $('beta-timing').hidden = !Number.isInteger(totalMs);
+  if (Number.isInteger(totalMs)) $('beta-timing').textContent = `Checkout: ${(totalMs / 1000).toFixed(2)}s ? ${beta.order_submission_attempted ? 'Order submission attempted once' : 'No order submitted'}`;
   $('beta-message').textContent = betaActionError || beta.message;
   $('beta-arm').disabled = betaPosting || !beta.can_arm;
   $('beta-test').disabled = betaPosting || !beta.can_arm;
@@ -167,7 +174,7 @@ async function betaAction(action) {
   betaPosting = true;
   betaActionError = null;
   if (snapshot) renderBeta();
-  const body = action === 'reset' ? {bag_cleared:$('beta-bag-cleared').checked} : {store_id:$('beta-store').value || null};
+  const body = action === 'reset' ? {bag_cleared:$('beta-bag-cleared').checked} : {store_id:$('beta-store').value || null, backend:'api', submit_once:$('beta-submit-once').checked, test_part:$('beta-test-part').value};
   if (action === 'arm') body.part = $('beta-part').value || null;
   try {
     const response = await fetch(`/api/beta/${action}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -183,6 +190,7 @@ async function betaAction(action) {
   }
 }
 for (const action of ['arm','test','stop','reset']) $('beta-' + action).addEventListener('click',() => betaAction(action));
+$('beta-submit-once').addEventListener('change',() => {if(snapshot)renderBeta();});
 $('beta-bag-cleared').addEventListener('change',() => {if(snapshot)renderBeta();});
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 refresh();

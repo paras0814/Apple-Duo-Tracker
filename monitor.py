@@ -19,7 +19,7 @@ import threading
 import time
 from urllib import error, parse, request
 import uuid
-from checkout_beta import CheckoutBeta, BetaError, TEST_PART, run_browser
+from checkout_beta import CheckoutBeta, BetaError, TEST_PART, TEST_PRODUCTS, run_browser
 
 ROOT = Path(__file__).resolve().parent
 CATALOG = json.loads((ROOT / "catalog.json").read_text(encoding="utf-8"))
@@ -528,6 +528,8 @@ class State:
         self.status = {"last_sweep_at": None, "last_ok_at": None, "requests": 0,
                        "failures": 0, "duration_ms": 0, "errors": [], "sweeps": 0,
                        "warnings": [], "request_failures": 0, "running": True, "discord_last_error": None}
+        self.stock_alert_wake = threading.Event()
+        self.beta_wake = threading.Event()
         self.beta = CheckoutBeta(self.db, self.lock, STORES, PARTS, buy_url)
 
     def apply(self, observations, *, errors=(), requests=0, duration_ms=0, diagnostics=None):
@@ -562,6 +564,9 @@ class State:
             if known == len(STORES) * len(PARTS):
                 self.status["last_ok_at"] = now
         self.beta.consider(observations)
+        # Wake consumers only after stock and beta-selection transactions commit.
+        self.stock_alert_wake.set()
+        self.beta_wake.set()
 
     def snapshot(self):
         with self.lock:
@@ -647,6 +652,9 @@ def send_discord(cfg, payload, fetch=http_json):
 
 def alert_loop(state, stop):
     while not stop.is_set():
+        # Clear before checking the durable queue: a concurrent committed event
+        # then either appears in this claim or leaves a wake pending for wait().
+        state.stock_alert_wake.clear()
         if state.cfg["discord"]["webhook_url"]:
             event = state.claim_alert()
             if event:
@@ -661,7 +669,7 @@ def alert_loop(state, stop):
                     state.complete_alert(event, failure=FetchError("Unexpected Discord delivery error", ambiguous=True))
                 stop.wait(0.5)
                 continue
-        stop.wait(0.5)
+        state.stock_alert_wake.wait(0.5)
 
 
 def poll_once(state, client):
@@ -686,7 +694,45 @@ def poll_loop(state, stop):
 
 
 def beta_loop(state, stop):
+    from beta.worker import APIBetaWorker
+
+    def stock_probe(job):
+        product = TEST_PRODUCTS[job.get("test_part", TEST_PART)]
+        prepared = api_worker._warm if api_worker._warm_run == job["run_id"] else None
+        if prepared is not None:
+            try:
+                response = prepared.request("GET", APPLE_URL, headers={"Accept": "application/json"},
+                                            fields={"pl": "true", "location": STORES[job["preferred_store"]]["zip"] if job["preferred_store"] else "10017",
+                                                    "parts.0": product["part"]})
+                if response.status == 200:
+                    return parse_pickup(response.json(), parts={product["part"]: {"storage": product["storage"], "color": product["color"]}}, product_name=product["model"]), []
+            except Exception:
+                pass
+        cfg = {**state.cfg, "seed_zips": [STORES[job["preferred_store"]]["zip"] if job["preferred_store"] else "10017"]}
+        client = AppleClient(cfg, parts={product["part"]: {"storage": product["storage"], "color": product["color"]}}, product_name=product["model"])
+        try:
+            rows, errors, _ = client._batch(cfg["seed_zips"])
+            return rows, errors
+        finally:
+            client.close()
+
+    def final_grant(run_id):
+        with state.lock:
+            row = state.beta._current()
+            return bool(row and row["run_id"] == run_id and row["backend"] == "api" and row["submit_once"]
+                        and not row["cancel_requested"] and row["status"] == "preparing")
+
+    api_worker = APIBetaWorker(ROOT, state.beta, stop, stock_probe=stock_probe,
+                               profile_path=ROOT / ".data/checkout-profile.local.json",
+                               profile_alias="local-beta", final_grant=final_grant,
+                               send_webhook=lambda payload: send_discord(state.cfg, payload))
     while not stop.is_set():
+        state.beta_wake.clear()
+        if state.beta.snapshot().get("backend") == "api":
+            if api_worker.step():
+                continue
+            state.beta_wake.wait(0.05)
+            continue
         job = state.beta.claim()
         if job:
             try:
@@ -700,7 +746,7 @@ def beta_loop(state, stop):
             except Exception:
                 state.beta.finish(job["run_id"], {"status":"needs_attention", "stage":"interrupted", "message":"The beta stopped unexpectedly. Inspect the beta browser bag before resetting; stock monitoring continues."})
                 LOG.warning("Checkout beta stopped; run %s needs attention", job["run_id"])
-        stop.wait(0.25)
+        state.beta_wake.wait(0.05)
 
 
 def handler_for(state, shutdown=None):
@@ -728,13 +774,16 @@ def handler_for(state, shutdown=None):
                     if not isinstance(body, dict):
                         raise ValueError()
                     if self.path in ("/api/beta/arm", "/api/beta/test"):
-                        result = state.beta.arm(is_test=self.path.endswith("/test"), store_id=body.get("store_id"), part=body.get("part"))
+                        result = state.beta.arm(is_test=self.path.endswith("/test"), store_id=body.get("store_id"), part=body.get("part"),
+                                                backend=body.get("backend", "api"), submit_once=body.get("submit_once", False),
+                                                test_part=body.get("test_part", TEST_PART))
                     elif self.path.endswith("/stop"):
                         result = state.beta.stop()
                     else:
                         result = state.beta.reset(body.get("bag_cleared"))
                     data = json.dumps(result).encode()
                     status_code = 200
+                    state.beta_wake.set()
                 except BetaError as exc:
                     data = json.dumps({"error":str(exc)}).encode()
                     status_code = 409
@@ -815,6 +864,8 @@ def main():
     stop = threading.Event()
     def shutdown(*_):
         stop.set()
+        state.stock_alert_wake.set()
+        state.beta_wake.set()
         threading.Thread(target=server.shutdown, daemon=True).start()
     # Bind before starting workers: a second process cannot send duplicate alerts.
     try:
@@ -842,6 +893,8 @@ def main():
         server.serve_forever(poll_interval=0.5)
     finally:
         stop.set()
+        state.stock_alert_wake.set()
+        state.beta_wake.set()
         server.server_close()
         for worker in workers:
             worker.join(timeout=12)
