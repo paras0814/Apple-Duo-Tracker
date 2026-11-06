@@ -31,26 +31,6 @@
       "retail_url": "https://www.apple.com/retail/bridgewater/"
     },
     {
-      "id": "R206",
-      "name": "Cherry Hill",
-      "city": "Cherry Hill",
-      "state": "NJ",
-      "zip": "08002",
-      "lat": 39.941067,
-      "lng": -75.023797,
-      "retail_url": "https://www.apple.com/retail/cherryhill/"
-    },
-    {
-      "id": "R138",
-      "name": "Freehold Raceway Mall",
-      "city": "Freehold",
-      "state": "NJ",
-      "zip": "07728",
-      "lat": 40.253813,
-      "lng": -74.30017,
-      "retail_url": "https://www.apple.com/retail/freeholdracewaymall/"
-    },
-    {
       "id": "R117",
       "name": "Garden State Plaza",
       "city": "Paramus",
@@ -71,16 +51,6 @@
       "retail_url": "https://www.apple.com/retail/menlopark/"
     },
     {
-      "id": "R549",
-      "name": "Quaker Bridge",
-      "city": "Lawrence Township",
-      "state": "NJ",
-      "zip": "08648",
-      "lat": 40.291824,
-      "lng": -74.681344,
-      "retail_url": "https://www.apple.com/retail/quakerbridge/"
-    },
-    {
       "id": "R103",
       "name": "Rockaway",
       "city": "Rockaway",
@@ -89,16 +59,6 @@
       "lat": 40.906615,
       "lng": -74.553704,
       "retail_url": "https://www.apple.com/retail/rockaway/"
-    },
-    {
-      "id": "R088",
-      "name": "Sagemore",
-      "city": "Marlton",
-      "state": "NJ",
-      "zip": "08053",
-      "lat": 39.87958,
-      "lng": -74.91887,
-      "retail_url": "https://www.apple.com/retail/sagemore/"
     },
     {
       "id": "R043",
@@ -111,16 +71,6 @@
       "retail_url": "https://www.apple.com/retail/shorthills/"
     },
     {
-      "id": "R013",
-      "name": "Tice's Corner",
-      "city": "Woodcliff Lake",
-      "state": "NJ",
-      "zip": "07677",
-      "lat": 41.04183,
-      "lng": -74.074864,
-      "retail_url": "https://www.apple.com/retail/ticescorner/"
-    },
-    {
       "id": "R325",
       "name": "Willowbrook",
       "city": "Wayne",
@@ -129,76 +79,6 @@
       "lat": 40.88944,
       "lng": -74.25861,
       "retail_url": "https://www.apple.com/retail/willowbrook/"
-    },
-    {
-      "id": "R095",
-      "name": "Fifth Avenue",
-      "city": "New York",
-      "state": "NY",
-      "zip": "10153",
-      "lat": 40.76383,
-      "lng": -73.97296,
-      "retail_url": "https://www.apple.com/retail/fifthavenue/"
-    },
-    {
-      "id": "R415",
-      "name": "Grand Central",
-      "city": "New York",
-      "state": "NY",
-      "zip": "10017",
-      "lat": 40.752733,
-      "lng": -73.976907,
-      "retail_url": "https://www.apple.com/retail/grandcentral/"
-    },
-    {
-      "id": "R032",
-      "name": "SoHo",
-      "city": "New York",
-      "state": "NY",
-      "zip": "10012",
-      "lat": 40.725058,
-      "lng": -73.999037,
-      "retail_url": "https://www.apple.com/retail/soho/"
-    },
-    {
-      "id": "R582",
-      "name": "Upper East Side",
-      "city": "New York",
-      "state": "NY",
-      "zip": "10021",
-      "lat": 40.773584,
-      "lng": -73.964542,
-      "retail_url": "https://www.apple.com/retail/uppereastside/"
-    },
-    {
-      "id": "R251",
-      "name": "Upper West Side",
-      "city": "New York",
-      "state": "NY",
-      "zip": "10023",
-      "lat": 40.775072222222,
-      "lng": -73.982595290736,
-      "retail_url": "https://www.apple.com/retail/upperwestside/"
-    },
-    {
-      "id": "R250",
-      "name": "West 14th Street",
-      "city": "New York",
-      "state": "NY",
-      "zip": "10014",
-      "lat": 40.7412,
-      "lng": -74.00542,
-      "retail_url": "https://www.apple.com/retail/west14thstreet/"
-    },
-    {
-      "id": "R654",
-      "name": "World Trade Center",
-      "city": "New York",
-      "state": "NY",
-      "zip": "10007",
-      "lat": 40.711721,
-      "lng": -74.011154,
-      "retail_url": "https://www.apple.com/retail/worldtradecenter/"
     }
   ]
 }

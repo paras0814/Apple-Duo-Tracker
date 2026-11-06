@@ -1,4 +1,4 @@
-"""Local NJ + Manhattan pickup monitor. Python 3.11+ with private verified HTTP transport."""
+"""Local NJ pickup monitor. Python 3.11+ with private verified HTTP transport."""
 from __future__ import annotations
 
 import argparse
@@ -19,7 +19,6 @@ import threading
 import time
 from urllib import error, parse, request
 import uuid
-from checkout_beta import CheckoutBeta, BetaError, TEST_PART, TEST_PRODUCTS, run_browser
 
 ROOT = Path(__file__).resolve().parent
 CATALOG = json.loads((ROOT / "catalog.json").read_text(encoding="utf-8"))
@@ -48,7 +47,7 @@ def load_config(path):
     timeout = cfg.get("request_timeout_seconds", 4)
     if not isinstance(timeout, (int, float)) or not 0 < timeout <= 30:
         raise ValueError("request_timeout_seconds must be between 0 and 30")
-    zips = cfg.get("seed_zips", ["07470", "08837", "08002"])
+    zips = cfg.get("seed_zips", ["07470", "08837", "07866"])
     if not isinstance(zips, list) or not zips or any(not isinstance(z, str) or not re.fullmatch(r"\d{5}", z) for z in zips):
         raise ValueError("seed_zips must be a nonempty list of five-digit ZIP strings")
     proxies = cfg.get("proxies", [])
@@ -477,7 +476,7 @@ class AppleClient:
         self.direct_recovery_used = False
         previous_failovers = self.failover_count
         rows, errors, requests = self._batch(self.cfg["seed_zips"])
-        # Regional ZIPs cover NJ and NYC. Query any missing store's own ZIP
+        # Regional ZIPs cover NJ. Query any missing store's own ZIP
         # when Apple changes its radius/list; missing never means sold out.
         missing = [s["zip"] for sid, s in STORES.items()
                    if any((sid, part) not in rows or rows[(sid, part)]["status"] == "unknown" for part in self.parts)]
@@ -529,8 +528,6 @@ class State:
                        "failures": 0, "duration_ms": 0, "errors": [], "sweeps": 0,
                        "warnings": [], "request_failures": 0, "running": True, "discord_last_error": None}
         self.stock_alert_wake = threading.Event()
-        self.beta_wake = threading.Event()
-        self.beta = CheckoutBeta(self.db, self.lock, STORES, PARTS, buy_url)
 
     def apply(self, observations, *, errors=(), requests=0, duration_ms=0, diagnostics=None):
         now = iso()
@@ -563,10 +560,7 @@ class State:
             self.status.update(diagnostics or {})
             if known == len(STORES) * len(PARTS):
                 self.status["last_ok_at"] = now
-        self.beta.consider(observations)
-        # Wake consumers only after stock and beta-selection transactions commit.
         self.stock_alert_wake.set()
-        self.beta_wake.set()
 
     def snapshot(self):
         with self.lock:
@@ -584,9 +578,8 @@ class State:
                                  "changed_at": previous.get("changed_at"),
                                  "reason": observed.get("reason") if observed else "Store or product missing from the latest successful responses",
                                  "buy_url": buy_url(part)})
-            events = [dict(r) for r in self.db.execute("SELECT * FROM events ORDER BY started_at DESC, id DESC LIMIT 100")]
+            events = [dict(r) for r in self.db.execute(f"SELECT * FROM events WHERE store_id IN ({','.join('?' for _ in STORES)}) ORDER BY started_at DESC, id DESC LIMIT 100", tuple(STORES))]
             return {"stores": list(STORES.values()), "parts": PARTS, "rows": rows, "events": events,
-                    "beta": self.beta.snapshot(),
                     "status": {**self.status, "stores_seen": len({r["store_id"] for r in rows if r["status"] != "unknown"}),
                                "products_verified": sum(r["verified"] for r in rows),
                                "stores_expected": len(STORES), "products_expected": len(STORES) * len(PARTS),
@@ -637,7 +630,7 @@ def discord_payload(event):
         "fields": [{"name": "Buy this model", "value": f'[Open iPhone Duo {model["storage"]} {model["color"]} on Apple ↗]({product_link})'},
                    {"name": "Apple store", "value": f'[Apple {store["name"]}]({store_link}) · {sid} · {store["zip"]}'},
                    {"name": "Part", "value": part, "inline": True}],
-        "timestamp": event["started_at"], "footer": {"text": "Apple-confirmed 256GB · NJ + Manhattan Duo Radar"}}]}
+        "timestamp": event["started_at"], "footer": {"text": "Apple-confirmed 256GB · NJ Duo Radar"}}]}
 
 
 def send_discord(cfg, payload, fetch=http_json):
@@ -693,62 +686,6 @@ def poll_loop(state, stop):
         stop.wait(max(0, state.cfg["interval_seconds"] - (time.monotonic() - start)))
 
 
-def beta_loop(state, stop):
-    from beta.worker import APIBetaWorker
-
-    def stock_probe(job):
-        product = TEST_PRODUCTS[job.get("test_part", TEST_PART)]
-        prepared = api_worker._warm if api_worker._warm_run == job["run_id"] else None
-        if prepared is not None:
-            try:
-                response = prepared.request("GET", APPLE_URL, headers={"Accept": "application/json"},
-                                            fields={"pl": "true", "location": STORES[job["preferred_store"]]["zip"] if job["preferred_store"] else "10017",
-                                                    "parts.0": product["part"]})
-                if response.status == 200:
-                    return parse_pickup(response.json(), parts={product["part"]: {"storage": product["storage"], "color": product["color"]}}, product_name=product["model"]), []
-            except Exception:
-                pass
-        cfg = {**state.cfg, "seed_zips": [STORES[job["preferred_store"]]["zip"] if job["preferred_store"] else "10017"]}
-        client = AppleClient(cfg, parts={product["part"]: {"storage": product["storage"], "color": product["color"]}}, product_name=product["model"])
-        try:
-            rows, errors, _ = client._batch(cfg["seed_zips"])
-            return rows, errors
-        finally:
-            client.close()
-
-    def final_grant(run_id):
-        with state.lock:
-            row = state.beta._current()
-            return bool(row and row["run_id"] == run_id and row["backend"] == "api" and row["submit_once"]
-                        and not row["cancel_requested"] and row["status"] == "preparing")
-
-    api_worker = APIBetaWorker(ROOT, state.beta, stop, stock_probe=stock_probe,
-                               profile_path=ROOT / ".data/checkout-profile.local.json",
-                               profile_alias="local-beta", final_grant=final_grant,
-                               send_webhook=lambda payload: send_discord(state.cfg, payload))
-    while not stop.is_set():
-        state.beta_wake.clear()
-        if state.beta.snapshot().get("backend") == "api":
-            if api_worker.step():
-                continue
-            state.beta_wake.wait(0.05)
-            continue
-        job = state.beta.claim()
-        if job:
-            try:
-                if job["status"] == "checking_stock":
-                    cfg = {**state.cfg, "seed_zips": [STORES[job["preferred_store"]]["zip"] if job["preferred_store"] else "10017"]}
-                    client = AppleClient(cfg, parts={TEST_PART: {"storage":"256GB", "color":"Black"}}, product_name="iPhone 17e")
-                    rows, errors, _ = client._batch(cfg["seed_zips"])
-                    state.beta.test_stock_checked(job["run_id"], rows, errors)
-                else:
-                    run_browser(ROOT, state.beta, job, stop)
-            except Exception:
-                state.beta.finish(job["run_id"], {"status":"needs_attention", "stage":"interrupted", "message":"The beta stopped unexpectedly. Inspect the beta browser bag before resetting; stock monitoring continues."})
-                LOG.warning("Checkout beta stopped; run %s needs attention", job["run_id"])
-        state.beta_wake.wait(0.05)
-
-
 def handler_for(state, shutdown=None):
     assets = {"/": ("index.html", "text/html; charset=utf-8"),
               "/app.js": ("app.js", "text/javascript; charset=utf-8"),
@@ -759,43 +696,10 @@ def handler_for(state, shutdown=None):
         def do_POST(self):
             origin = self.headers.get("Origin")
             expected_origin = f"http://127.0.0.1:{self.server.server_port}"
-            beta_routes = {"/api/beta/arm", "/api/beta/test", "/api/beta/stop", "/api/beta/reset"}
-            if (self.path not in beta_routes | {"/api/stop"}
+            if (self.path != "/api/stop"
                     or self.headers.get("Content-Type") != "application/json"
                     or origin not in (None, expected_origin)):
-                self.send_error(403)
-                return
-            if self.path in beta_routes:
-                try:
-                    length = int(self.headers.get("Content-Length", "0"))
-                    if not 0 < length <= 4096:
-                        raise ValueError()
-                    body = json.loads(self.rfile.read(length))
-                    if not isinstance(body, dict):
-                        raise ValueError()
-                    if self.path in ("/api/beta/arm", "/api/beta/test"):
-                        result = state.beta.arm(is_test=self.path.endswith("/test"), store_id=body.get("store_id"), part=body.get("part"),
-                                                backend=body.get("backend", "api"), submit_once=body.get("submit_once", False),
-                                                test_part=body.get("test_part", TEST_PART))
-                    elif self.path.endswith("/stop"):
-                        result = state.beta.stop()
-                    else:
-                        result = state.beta.reset(body.get("bag_cleared"))
-                    data = json.dumps(result).encode()
-                    status_code = 200
-                    state.beta_wake.set()
-                except BetaError as exc:
-                    data = json.dumps({"error":str(exc)}).encode()
-                    status_code = 409
-                except (ValueError, TypeError):
-                    data = b'{"error":"Invalid beta request"}'
-                    status_code = 400
-                self.send_response(status_code)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(data)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(data)
+                self.send_error(404)
                 return
             if shutdown is None:
                 self.send_error(403)
@@ -803,7 +707,8 @@ def handler_for(state, shutdown=None):
             self.send_response(200)
             self.send_header("Content-Length", "0")
             self.end_headers()
-            shutdown()
+            import ctypes
+            threading.Thread(target=shutdown, daemon=True).start()
 
         def do_GET(self):
             path = parse.urlsplit(self.path).path
@@ -865,7 +770,6 @@ def main():
     def shutdown(*_):
         stop.set()
         state.stock_alert_wake.set()
-        state.beta_wake.set()
         threading.Thread(target=server.shutdown, daemon=True).start()
     # Bind before starting workers: a second process cannot send duplicate alerts.
     try:
@@ -885,16 +789,15 @@ def main():
     state.status["sleep_inhibited"] = awake
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
-    workers = [threading.Thread(target=fn, args=(state, stop), daemon=True) for fn in (poll_loop, alert_loop, beta_loop)]
+    workers = [threading.Thread(target=fn, args=(state, stop), daemon=True) for fn in (poll_loop, alert_loop)]
     for worker in workers:
         worker.start()
-    LOG.info("NJ + Manhattan Duo Radar: http://127.0.0.1:%d (keep this process running)", cfg["dashboard_port"])
+    LOG.info("NJ Duo Radar: http://127.0.0.1:%d (keep this process running)", cfg["dashboard_port"])
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
         stop.set()
         state.stock_alert_wake.set()
-        state.beta_wake.set()
         server.server_close()
         for worker in workers:
             worker.join(timeout=12)

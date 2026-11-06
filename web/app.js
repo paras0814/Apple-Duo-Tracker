@@ -6,15 +6,13 @@ let region = 'all';
 let selected = null;
 let fetching = false;
 let bookmarklet = null;
-let betaPosting = false;
-let betaActionError = null;
 const text = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clock = value => value ? new Date(value).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : 'Waiting for Apple';
 const duration = (start, end) => { const seconds = Math.max(0, Math.floor(((end ? new Date(end) : new Date()) - new Date(start)) / 1000)); return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds/60)}m ${seconds%60}s`; };
 const statusLabel = s => ({available:'Available ↗',unavailable:'Sold out',unknown:'Unknown'}[s] || 'Unknown');
 function rowsFor(sid) { return snapshot.rows.filter(r => r.store_id === sid); }
 function storeStatus(sid) { const rows = rowsFor(sid); return rows.some(r => r.status === 'available') ? 'available' : rows.some(r => r.status === 'unknown') ? 'unknown' : 'unavailable'; }
-function inRegion(store) { return region === 'all' || (region === 'NJ' ? store.state === 'NJ' : store.state === 'NY'); }
+function inRegion(store) { return region === 'all' || (region === 'NJ' && store.state === 'NJ'); }
 function bindMapPoints(map) { map.querySelectorAll('[data-store]').forEach(node => { node.addEventListener('click', () => inspect(node.dataset.store)); node.addEventListener('keydown', e => {if (e.key === 'Enter' || e.key === ' ') {e.preventDefault();inspect(node.dataset.store);}}); }); }
 function renderMap() {
   const project = (lng,lat) => [155 + (lng + 75.12) * 330, 50 + (41.12 - lat) * 330];
@@ -27,14 +25,9 @@ function renderMap() {
   svg += '<text class="map-state" x="70" y="330" transform="rotate(-56 70 330)">PENNSYLVANIA</text><text class="map-state" x="470" y="135">NEW YORK</text><text class="map-state" x="440" y="440">ATLANTIC</text>';
   svg += links.filter(([a,b]) => positions.has(a) && positions.has(b)).map(([a,b]) => `<line class="map-line" x1="${positions.get(a)[0]}" y1="${positions.get(a)[1]}" x2="${positions.get(b)[0]}" y2="${positions.get(b)[1]}"/>`).join('');
   const labels = {R013:[11,-10],R117:[13,-5],R755:[13,15],R325:[-13,-10],R103:[-13,-10],R043:[-13,-9],R104:[-13,-10],R067:[13,12],R138:[13,7],R549:[-13,15],R206:[-13,-10],R088:[13,13]};
-  svg += snapshot.stores.filter(s => s.state === 'NJ').map(s => {const [x,y] = positions.get(s.id); const [dx,dy] = labels[s.id] || [13,-10];const status = storeStatus(s.id);return `<g class="store-point ${status}" data-store="${s.id}" tabindex="0" role="button" aria-label="${text(s.name)}: ${status}" transform="translate(${x},${y})"><title>${text(s.name)}: ${status}</title><circle r="5"/><circle class="hit" r="18"/><text x="${dx}" y="${dy}" text-anchor="${dx<0?'end':'start'}">${text(s.name.replace('Freehold Raceway Mall','Freehold').replace('Garden State Plaza','Garden State'))}</text></g>`;}).join('');
+  svg += snapshot.stores.filter(s => s.state === 'NJ').map(s => {const [x,y] = positions.get(s.id); const [dx,dy] = labels[s.id] || [13,-10];const status = storeStatus(s.id);return `<g class="store-point ${status}" data-store="${s.id}" tabindex="0" role="button" aria-label="${text(s.name)}: ${status}" transform="translate(${x},${y})"><title>${text(s.name)}: ${status}</title><circle r="5"/><circle class="hit" r="18"/><text x="${dx}" y="${dy}" text-anchor="${dx<0?'end':'start'}">${text(s.name)}</text></g>`;}).join('');
   $('radar').innerHTML = svg;
   bindMapPoints($('radar'));
-  const cityStores = snapshot.stores.filter(s => s.state === 'NY');
-  const rowHeight = 34;
-  $('city-radar').setAttribute('viewBox', `0 0 420 ${Math.max(80,cityStores.length * rowHeight + 28)}`);
-  $('city-radar').innerHTML = `<line class="city-spine" x1="17" y1="20" x2="17" y2="${Math.max(20,(cityStores.length-1)*rowHeight+20)}"/>` + cityStores.map((s,i) => `<g class="store-point ${storeStatus(s.id)}" data-store="${s.id}" tabindex="0" role="button" aria-label="${text(s.name)}: ${storeStatus(s.id)}" transform="translate(17,${20+i*rowHeight})"><title>${text(s.name)} · ${text(s.city)}: ${storeStatus(s.id)}</title><rect class="city-hit" x="-12" y="-15" width="410" height="31"/><circle r="4"/><text x="18" y="4">${text(s.name)}</text><text class="city-location" x="391" y="4" text-anchor="end">${text(s.city === 'New York' ? 'Manhattan' : s.city === 'Elmhurst' ? 'Queens' : s.city)}</text></g>`).join('');
-  bindMapPoints($('city-radar'));
 }
 function inspect(id) {
   selected = id;
@@ -43,30 +36,6 @@ function inspect(id) {
   const details = `<strong>${text(store.name)}</strong> · ${text(store.city)}, ${text(store.state)}<br>${rowsFor(id).map(r => `${text(snapshot.parts[r.part].color)} 256GB: ${statusLabel(r.status)}`).join(' &nbsp; / &nbsp; ')}`;
   $('inspect').innerHTML = details;
   $('city-inspect').innerHTML = store.state === 'NY' ? details : 'Choose a city store for pickup details.';
-}
-function renderBeta() {
-  const beta = snapshot.beta || {status:'unavailable',can_arm:false,message:'Restart the local monitor to load the checkout beta.'};
-  const selector = $('beta-store');
-  if (selector.options.length !== snapshot.stores.length + 1) {
-    const selectedStore = selector.value;
-    selector.innerHTML = '<option value="">Any watched store</option>' + snapshot.stores.map(store => `<option value="${store.id}">${text(store.name)} · ${store.state}</option>`).join('');
-    selector.value = selectedStore;
-  }
-  $('beta-state').textContent = beta.status.replaceAll('_',' ');
-  $('beta-submit-once').disabled = betaPosting || !beta.can_arm;
-  $('beta-test-part').disabled = betaPosting || !beta.can_arm;
-  if (!beta.can_arm) $('beta-submit-once').checked = !!beta.submit_once;
-  $('beta-mode').textContent = $('beta-submit-once').checked ? 'ONE ORDER' : 'REVIEW ONLY';
-  const totalMs = beta.result?.timings_ms?.total;
-  $('beta-timing').hidden = !Number.isInteger(totalMs);
-  if (Number.isInteger(totalMs)) $('beta-timing').textContent = `Checkout: ${(totalMs / 1000).toFixed(2)}s ? ${beta.order_submission_attempted ? 'Order submission attempted once' : 'No order submitted'}`;
-  $('beta-message').textContent = betaActionError || beta.message;
-  $('beta-arm').disabled = betaPosting || !beta.can_arm;
-  $('beta-test').disabled = betaPosting || !beta.can_arm;
-  $('beta-stop').disabled = betaPosting || beta.can_arm || beta.status === 'unavailable';
-  $('beta-reset').disabled = betaPosting || beta.worker_active || !$('beta-bag-cleared').checked || ['preparing','queued','checking_stock_running'].includes(beta.status);
-  $('beta-target').hidden = !beta.target;
-  if (beta.target) $('beta-target').textContent = `${beta.target.is_test ? 'TEST · ' : ''}${beta.target.model} ${beta.target.storage} ${beta.target.color} · Apple ${beta.target.store_name}`;
 }
 function render() {
   const {status, stores, rows, parts, events} = snapshot;
@@ -79,10 +48,9 @@ function render() {
   $('connection').className = `connection ${fresh && full ? 'live' : 'offline'}`;
   $('connection-text').textContent = !fresh ? 'Waiting for a fresh sweep' : full ? 'Radar is live' : 'Partial coverage';
   $('coverage').textContent = `${status.stores_seen} / ${stores.length}`;
-  $('intro').textContent = `Two colors. ${stores.length} stores across New Jersey + Manhattan. A quiet watch for your next pickup.`;
+  $('intro').textContent = `Two colors. ${stores.length} stores across New Jersey. A quiet watch for your next pickup.`;
   $('region-count-all').textContent = stores.length;
   $('region-count-NJ').textContent = stores.filter(s => s.state === 'NJ').length;
-  $('region-count-NYC').textContent = stores.filter(s => s.state === 'NY').length;
   $('ready-count').textContent = new Set(ready.map(r => r.store_id)).size.toString().padStart(2,'0');
   $('shelf-status').textContent = full ? '● LIVE' : '● WAITING';
   $('discord-tag').textContent = status.discord_configured ? (status.discord_last_error ? 'DELIVERY ISSUE' : 'CONFIGURED') : 'SETUP NEEDED';
@@ -106,7 +74,6 @@ function render() {
   $('empty-filter').hidden = visible.length !== 0;
   $('history').innerHTML = events.length ? events.map(e => {const s=stores.find(s=>s.id===e.store_id);return `<tr><td>${text(s?.name || e.store_id)}</td><td>${text(parts[e.part]?.color || e.part)}</td><td title="${text(new Date(e.started_at).toLocaleString())}">${clock(e.started_at)}</td><td>${duration(e.started_at,e.ended_at)}${e.ended_at?'':' · open'}</td><td class="${e.delivery==='delivered'?'delivered':''}" title="${text(e.delivery_error || '')}">${text(e.delivery)}</td></tr>`;}).join('') : '<tr><td colspan="5" class="empty">No stock transitions recorded yet. Initial stock and restocks will appear here.</td></tr>';
   renderMap();
-  renderBeta();
   if (selected) inspect(selected);
 }
 async function refresh() {
@@ -169,29 +136,6 @@ $('copy-bookmarklet').addEventListener('click', async () => {
 $('bookmarklet-drag').addEventListener('click', event => {event.preventDefault();$('bookmarklet-status').textContent='Drag Add to Bag to your bookmarks bar, or use Copy bookmarklet for manual setup.';});
 loadBookmarklet().catch(() => {});
 
-async function betaAction(action) {
-  if (betaPosting) return;
-  betaPosting = true;
-  betaActionError = null;
-  if (snapshot) renderBeta();
-  const body = action === 'reset' ? {bag_cleared:$('beta-bag-cleared').checked} : {store_id:$('beta-store').value || null, backend:'api', submit_once:$('beta-submit-once').checked, test_part:$('beta-test-part').value};
-  if (action === 'arm') body.part = $('beta-part').value || null;
-  try {
-    const response = await fetch(`/api/beta/${action}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || 'The beta command failed.');
-    if (snapshot) snapshot.beta = result;
-    if (action === 'reset') $('beta-bag-cleared').checked = false;
-  } catch (error) {
-    betaActionError = error.message;
-  } finally {
-    betaPosting = false;
-    if (snapshot) renderBeta();
-  }
-}
-for (const action of ['arm','test','stop','reset']) $('beta-' + action).addEventListener('click',() => betaAction(action));
-$('beta-submit-once').addEventListener('change',() => {if(snapshot)renderBeta();});
-$('beta-bag-cleared').addEventListener('change',() => {if(snapshot)renderBeta();});
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 refresh();
 setInterval(refresh, 1000);
