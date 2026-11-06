@@ -592,7 +592,9 @@ class State:
     def claim_alert(self):
         with self.lock, self.db:
             # Only alert for stock verified in the most recent sweep, including after restart.
-            for row in self.db.execute("SELECT * FROM events WHERE delivery='pending' AND ended_at IS NULL AND next_attempt<=? ORDER BY started_at", (time.time(),)):
+            allowed_stores = ",".join("?" for _ in STORES)
+            query = f"SELECT * FROM events WHERE store_id IN ({allowed_stores}) AND delivery='pending' AND ended_at IS NULL AND next_attempt<=? ORDER BY started_at"
+            for row in self.db.execute(query, (*STORES, time.time())):
                 key = (row["store_id"], row["part"])
                 if self.observed.get(key, {}).get("status") != "available":
                     continue
