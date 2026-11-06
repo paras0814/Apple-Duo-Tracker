@@ -212,7 +212,6 @@ class AppleClient:
         self.last_errors = {}
         self.rotation = 0
         self.proxy_health = {}
-        self.preferred_proxies = {}
         self.network_lock = threading.Lock()
         self.request_count = 0
         self.failover_count = 0
@@ -401,7 +400,7 @@ class AppleClient:
         last_error = None
         for attempt in range(min(3, len(self.cfg["proxies"]))):
             try:
-                index, proxy = self._next_proxy(excluded, self.preferred_proxies.get(zip_code) if attempt == 0 else None)
+                index, proxy = self._next_proxy(excluded)
             except FetchError:
                 if last_error:
                     raise last_error
@@ -415,7 +414,6 @@ class AppleClient:
                 result = self._query(zip_code, proxy, timeout=max(0.1, timeout))
                 with self.network_lock:
                     self.proxy_health.pop(index, None)
-                    self.preferred_proxies[zip_code] = index
                     if attempt:
                         self.failover_count += 1
                 return result
