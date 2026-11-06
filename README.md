@@ -55,7 +55,7 @@ To use the persistent verified proxy pool, set `"monitor_connection": "proxy"`. 
 
 ## Polling and duplicate suppression
 
-The endpoint is `https://www.apple.com/shop/retail/pickup-message?pl=true&location=ZIP&parts.0=MK1F4LL%2FA&parts.1=MK1E4LL%2FA`. The monitor reads `body.stores[].partsAvailability[part].pickupDisplay` and accepts only catalogued store IDs with the expected NJ state. Three regional ZIPs cover the remaining stores, with targeted ZIP fallback for missing stores.
+The endpoint is `https://www.apple.com/shop/retail/pickup-message?pl=true&location=ZIP&parts.0=MK1F4LL%2FA&parts.1=MK1E4LL%2FA`. The monitor reads `body.stores[].partsAvailability[part].pickupDisplay` and accepts only catalogued store IDs with the expected NJ state. One northern New Jersey ZIP is used for normal coverage; the monitor queries a store-specific ZIP only when Apple omits a watched location.
 
 Sweeps start every five seconds under normal conditions and never overlap. Slow requests can extend the interval; Apple errors trigger backoff and `Retry-After` is honored. HTTP 429 responses trigger at least a one-minute cooldown. Direct session rejections get one bounded renewal attempt per sweep, followed by another check on the configured interval; proxy-specific rejections can use another ready route. Persistent HTTP 541 means Apple is refusing the requests: the process can remain running while stock coverage is unavailable. Failed, missing, stale, or unverified data is **unknown**, never fabricated stock or a sold-out transition.
 

@@ -47,7 +47,7 @@ def load_config(path):
     timeout = cfg.get("request_timeout_seconds", 4)
     if not isinstance(timeout, (int, float)) or not 0 < timeout <= 30:
         raise ValueError("request_timeout_seconds must be between 0 and 30")
-    zips = cfg.get("seed_zips", ["07470", "08837", "07866"])
+    zips = cfg.get("seed_zips", ["07470"])
     if not isinstance(zips, list) or not zips or any(not isinstance(z, str) or not re.fullmatch(r"\d{5}", z) for z in zips):
         raise ValueError("seed_zips must be a nonempty list of five-digit ZIP strings")
     proxies = cfg.get("proxies", [])

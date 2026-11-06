@@ -3,9 +3,7 @@
   "request_timeout_seconds": 4,
   "monitor_connection": "direct",
   "seed_zips": [
-    "07470",
-    "08837",
-    "07866"
+    "07470"
   ],
   "proxies": [],
   "discord": {
